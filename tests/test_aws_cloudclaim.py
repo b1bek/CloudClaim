@@ -10,7 +10,7 @@ from contextlib import redirect_stdout
 from unittest.mock import patch
 
 from cloudclaim.clouds.aws.availability import check_target, check_targets, normalize_availability
-from cloudclaim.clouds.aws.claims import claim_targets, compact_env_name, select_solution_stack
+from cloudclaim.clouds.aws.claims import claim_targets, compact_env_name, select_solution_stack, terminate_environment
 from cloudclaim.clouds.aws.client import precheck as aws_precheck
 from cloudclaim.clouds.aws.commands import build_parser, run_check, run_precheck, run_services, selected_services_from_arg
 from cloudclaim.clouds.aws.inputs import load_targets
@@ -171,6 +171,36 @@ class AwsClaimTests(unittest.TestCase):
         self.assertEqual(result["results"][0]["status"], "unsupported")
         availability_aws_json.assert_not_called()
         claim_aws_json.assert_not_called()
+
+    def test_terminate_environment_waits_out_pending_creation(self) -> None:
+        with patch(
+            "cloudclaim.clouds.aws.claims.aws_json",
+            side_effect=[
+                (True, {"Environments": [{"Status": "Launching"}]}),
+                (True, {"Environments": [{"Status": "Ready"}]}),
+                (True, {"EnvironmentName": "cc-demo-12345678"}),
+            ],
+        ) as aws_json, patch("cloudclaim.clouds.aws.claims.time.sleep") as sleep:
+            ok, message = terminate_environment("cc-demo-12345678", "us-east-1", "dev")
+
+        self.assertTrue(ok)
+        self.assertEqual(message, "")
+        sleep.assert_called_once_with(15)
+        self.assertEqual(aws_json.mock_calls[0].args[0][0:2], ["elasticbeanstalk", "describe-environments"])
+        self.assertEqual(aws_json.mock_calls[1].args[0][0:2], ["elasticbeanstalk", "describe-environments"])
+        self.assertEqual(aws_json.mock_calls[2].args[0][0:2], ["elasticbeanstalk", "terminate-environment"])
+
+    def test_terminate_environment_accepts_already_terminating_environment(self) -> None:
+        with patch(
+            "cloudclaim.clouds.aws.claims.aws_json",
+            return_value=(True, {"Environments": [{"Status": "Terminating"}]}),
+        ) as aws_json:
+            ok, message = terminate_environment("cc-demo-12345678", "us-east-1", None)
+
+        self.assertTrue(ok)
+        self.assertEqual(message, "")
+        self.assertEqual(len(aws_json.mock_calls), 1)
+        self.assertEqual(aws_json.mock_calls[0].args[0][0:2], ["elasticbeanstalk", "describe-environments"])
 
 
 class AwsOutputTests(unittest.TestCase):

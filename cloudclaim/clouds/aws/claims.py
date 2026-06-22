@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import UTC, datetime
 from secrets import token_hex
+import time
 from typing import Any
 
 from .availability import check_target
@@ -12,6 +13,10 @@ from .services import target_key
 
 
 CLAIMABLE_SERVICES = {"elastic_beanstalk"}
+PENDING_CREATION_STATUSES = {"Launching"}
+ALREADY_CLEANING_STATUSES = {"Terminating", "Terminated"}
+DEFAULT_CLEANUP_WAIT_SECONDS = 900
+DEFAULT_CLEANUP_POLL_SECONDS = 15
 
 
 def compact_env_name(name: str) -> str:
@@ -139,6 +144,12 @@ CLAIM_HANDLERS: dict[str, ClaimHandler] = {
 
 
 def terminate_environment(environment_name: str, region: str, profile: str | None) -> tuple[bool, str]:
+    wait_ok, wait_message, already_cleaning = wait_until_environment_can_terminate(environment_name, region, profile)
+    if not wait_ok:
+        return False, wait_message
+    if already_cleaning:
+        return True, ""
+
     ok, data = aws_json(
         ["elasticbeanstalk", "terminate-environment", "--environment-name", environment_name, "--terminate-resources"],
         region=region,
@@ -148,6 +159,50 @@ def terminate_environment(environment_name: str, region: str, profile: str | Non
     if ok:
         return True, ""
     return False, message_from_response(data)
+
+
+def environment_status(data: dict[str, Any]) -> str:
+    environments = data.get("Environments")
+    if not isinstance(environments, list) or not environments:
+        return ""
+    environment = environments[0]
+    if not isinstance(environment, dict):
+        return ""
+    return str(environment.get("Status") or "")
+
+
+def wait_until_environment_can_terminate(
+    environment_name: str,
+    region: str,
+    profile: str | None,
+    *,
+    max_wait_seconds: int = DEFAULT_CLEANUP_WAIT_SECONDS,
+    poll_seconds: int = DEFAULT_CLEANUP_POLL_SECONDS,
+) -> tuple[bool, str, bool]:
+    deadline = time.monotonic() + max_wait_seconds
+    last_status = ""
+
+    while True:
+        ok, data = aws_json(
+            ["elasticbeanstalk", "describe-environments", "--environment-names", environment_name],
+            region=region,
+            profile=profile,
+            timeout=60,
+        )
+        if not ok:
+            return False, message_from_response(data), False
+
+        status = environment_status(data)
+        last_status = status or last_status
+        if status in ALREADY_CLEANING_STATUSES:
+            return True, "", True
+        if not status or status not in PENDING_CREATION_STATUSES:
+            return True, "", False
+
+        if time.monotonic() >= deadline:
+            return False, f"environment still pending creation after {max_wait_seconds}s [status:{last_status}]", False
+
+        time.sleep(poll_seconds)
 
 
 def claim_targets(
