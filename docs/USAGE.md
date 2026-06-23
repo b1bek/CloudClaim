@@ -108,6 +108,7 @@ python3 -m cloudclaim aws check targets.txt
 ```text
 app.azurewebsites.net [available] [azure] [app_service]
 cloudclaim-eb-target.us-east-1.elasticbeanstalk.com [available] [aws] [elastic_beanstalk]
+demo-parent.us-west-2.elasticbeanstalk.com [available] [aws] [elastic_beanstalk] [child:child.demo-parent.us-west-2.elasticbeanstalk.com]
 name.eastus.cloudapp.azure.com [not-available] [azure] [public_ip_dns_label]
 ```
 
@@ -217,7 +218,10 @@ Azure:
 
 AWS:
 
-- Elastic Beanstalk input must use `name.region.elasticbeanstalk.com`.
+- Elastic Beanstalk claim targets use `name.region.elasticbeanstalk.com`.
+- Descendant Beanstalk inputs such as
+  `child.name.region.elasticbeanstalk.com` are normalized to the parent claim
+  target and printed with `[child:<input>]`.
 - `--profile <name>` passes an AWS CLI profile.
 - `--application-name <name>` controls the Elastic Beanstalk application.
 - `--solution-stack-name <name>` overrides automatic Elastic Beanstalk platform

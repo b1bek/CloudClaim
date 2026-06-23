@@ -51,7 +51,8 @@ Azure:
 
 AWS:
 
-- `elastic_beanstalk` (`name.region.elasticbeanstalk.com`)
+- `elastic_beanstalk` (`name.region.elasticbeanstalk.com`; descendant labels
+  normalize to this parent CNAME)
 
 ## Output
 
@@ -60,6 +61,7 @@ Human output streams compact tagged lines:
 ```text
 name.eastus.cloudapp.azure.com [available] [azure] [public_ip_dns_label]
 cloudclaim-eb-target.us-east-1.elasticbeanstalk.com [not-available] [aws] [elastic_beanstalk]
+demo-parent.us-west-2.elasticbeanstalk.com [available] [aws] [elastic_beanstalk] [child:child.demo-parent.us-west-2.elasticbeanstalk.com]
 ```
 
 Use `--json` for JSON lines and `--out result.json` only when you want a full

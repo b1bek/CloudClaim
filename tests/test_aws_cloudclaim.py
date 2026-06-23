@@ -37,6 +37,17 @@ class AwsHostnameClassificationTests(unittest.TestCase):
         self.assertEqual(target.name, "demo-app")
         self.assertEqual(target.region, "us-west-2")
 
+    def test_classifies_elastic_beanstalk_descendant_as_parent_cname(self) -> None:
+        target = classify_hostname("child.demo-parent.us-west-2.elasticbeanstalk.com")
+
+        self.assertIsNotNone(target)
+        assert target is not None
+        self.assertEqual(target.service, "elastic_beanstalk")
+        self.assertEqual(target.hostname, "demo-parent.us-west-2.elasticbeanstalk.com")
+        self.assertEqual(target.name, "demo-parent")
+        self.assertEqual(target.region, "us-west-2")
+        self.assertEqual(target.source_host, "child.demo-parent.us-west-2.elasticbeanstalk.com")
+
     def test_does_not_classify_s3_as_claimable(self) -> None:
         self.assertIsNone(classify_hostname("demo.s3.amazonaws.com"))
 
@@ -60,6 +71,13 @@ class AwsInputParsingTests(unittest.TestCase):
 
         self.assertEqual([target.hostname for target in targets], ["demo-app.us-east-1.elasticbeanstalk.com", "demo.s3.amazonaws.com"])
         self.assertEqual([target.service for target in targets], ["elastic_beanstalk", "unsupported"])
+
+    def test_load_targets_normalizes_elastic_beanstalk_descendants(self) -> None:
+        targets = load_targets(["child.demo-parent.us-west-2.elasticbeanstalk.com"])
+
+        self.assertEqual(len(targets), 1)
+        self.assertEqual(targets[0].hostname, "demo-parent.us-west-2.elasticbeanstalk.com")
+        self.assertEqual(targets[0].service, "elastic_beanstalk")
 
     def test_load_targets_rejects_non_txt_file(self) -> None:
         with TemporaryDirectory() as temp_dir:
@@ -284,6 +302,47 @@ class AwsOutputTests(unittest.TestCase):
         text = output.getvalue()
         self.assertIn("[INF] aws check: 1/1 available", text)
         self.assertIn("demo.us-east-1.elasticbeanstalk.com [available] [aws] [elastic_beanstalk]", text)
+
+    def test_print_check_results_notes_elastic_beanstalk_parent_normalization(self) -> None:
+        output = io.StringIO()
+        with redirect_stdout(output):
+            print_check_results(
+                [
+                    {
+                        "aws_hostname": "demo-parent.us-west-2.elasticbeanstalk.com",
+                        "aws_service": "elastic_beanstalk",
+                        "source_host": "child.demo-parent.us-west-2.elasticbeanstalk.com",
+                        "registration_available": True,
+                        "registration_checked_region": "us-west-2",
+                        "registration_checked_name": "demo-parent",
+                    }
+                ]
+            )
+
+        text = output.getvalue()
+        self.assertIn("demo-parent.us-west-2.elasticbeanstalk.com [available] [aws] [elastic_beanstalk]", text)
+        self.assertIn("[child:child.demo-parent.us-west-2.elasticbeanstalk.com]", text)
+
+    def test_print_check_results_json_includes_elastic_beanstalk_parent_note(self) -> None:
+        output = io.StringIO()
+        with redirect_stdout(output):
+            print_check_results(
+                [
+                    {
+                        "aws_hostname": "demo-parent.us-west-2.elasticbeanstalk.com",
+                        "aws_service": "elastic_beanstalk",
+                        "source_host": "child.demo-parent.us-west-2.elasticbeanstalk.com",
+                        "registration_available": True,
+                        "registration_checked_region": "us-west-2",
+                        "registration_checked_name": "demo-parent",
+                    }
+                ],
+                json_output=True,
+            )
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(payload["input_hostname"], "child.demo-parent.us-west-2.elasticbeanstalk.com")
+        self.assertEqual(payload["note"], "child:child.demo-parent.us-west-2.elasticbeanstalk.com")
 
     def test_print_claim_result_simplifies_not_available_output(self) -> None:
         output = io.StringIO()

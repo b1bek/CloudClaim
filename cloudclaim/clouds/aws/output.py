@@ -10,23 +10,35 @@ def bool_availability(item: dict[str, Any]) -> bool:
     return item.get("registration_available") is True
 
 
+def normalized_parent_note(payload: dict[str, Any]) -> str:
+    input_hostname = payload.get("input_hostname", "")
+    hostname = payload.get("hostname", "")
+    service = payload.get("service", "")
+    if service == "elastic_beanstalk" and input_hostname and input_hostname != hostname:
+        return f"child:{input_hostname}"
+    return ""
+
+
 def check_payload(item: dict[str, Any]) -> dict[str, Any]:
-    return {
+    payload = {
         "available": bool_availability(item),
         "hostname": item.get("aws_hostname", ""),
+        "input_hostname": item.get("source_host", ""),
         "message": item.get("registration_message", ""),
         "name": item.get("registration_checked_name", ""),
         "region": item.get("registration_checked_region", ""),
         "service": item.get("aws_service", ""),
         "status": item.get("registration_status", ""),
     }
+    payload["note"] = normalized_parent_note(payload)
+    return payload
 
 
 def claim_payload(item: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
     status = item.get("status", "")
     created = item.get("created") if isinstance(item.get("created"), dict) else {}
     checked = item.get("registration_status") not in {"", None, "unsupported"} or item.get("registration_available") in {True, False}
-    return {
+    payload = {
         "application_name": result.get("application_name", ""),
         "available": bool_availability(item),
         "availability_status": item.get("registration_status", ""),
@@ -37,12 +49,15 @@ def claim_payload(item: dict[str, Any], result: dict[str, Any]) -> dict[str, Any
         "failure_reason": item.get("failure_reason", ""),
         "hint": item.get("hint", ""),
         "hostname": item.get("aws_hostname", ""),
+        "input_hostname": item.get("source_host", ""),
         "message": item.get("message") or item.get("registration_message", ""),
         "name": item.get("registration_checked_name", ""),
         "region": item.get("registration_checked_region", ""),
         "service": item.get("aws_service", ""),
         "status": status,
     }
+    payload["note"] = normalized_parent_note(payload)
+    return payload
 
 
 def format_check_line(payload: dict[str, Any], *, color: bool = False) -> str:
@@ -55,6 +70,8 @@ def format_check_line(payload: dict[str, Any], *, color: bool = False) -> str:
     line = f"{payload['hostname']} {tag_join(status, 'aws', payload['service'], color=color)}"
     if payload["status"] == "error" and payload["message"]:
         line = f"{line} {paint(compact_message(payload['message']), 'yellow', color)}"
+    if payload["note"]:
+        line = f"{line} {tag(payload['note'], color=color)}"
     return line
 
 
@@ -97,6 +114,8 @@ def format_claim_line(payload: dict[str, Any], *, color: bool = False) -> str:
         line = f"{line} {tag('hint', color=color)} {paint(compact_message(payload['hint']), 'cyan', color)}"
     if payload["status"] == "unsupported_claim" and payload["message"]:
         line = f"{line} {paint(compact_message(payload['message']), 'yellow', color)}"
+    if payload["note"]:
+        line = f"{line} {tag(payload['note'], color=color)}"
     return line
 
 
