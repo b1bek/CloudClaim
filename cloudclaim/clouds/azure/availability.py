@@ -77,6 +77,11 @@ def check_traffic_manager(target: AzureTarget, sub: str) -> dict[str, Any]:
     return normalize_availability(ok, data, target, "Microsoft.Network/trafficManagerProfiles")
 
 
+def check_api_management(target: AzureTarget, sub: str) -> dict[str, Any]:
+    ok, data = az_json(["apim", "check-name", "--name", target.name], timeout=60)
+    return normalize_availability(ok, data, target, "Microsoft.ApiManagement/service")
+
+
 def check_storage_account(target: AzureTarget, sub: str) -> dict[str, Any]:
     ok, data = az_json(["storage", "account", "check-name", "--name", target.name], timeout=60)
     return normalize_availability(ok, data, target, "Microsoft.Storage/storageAccounts")
@@ -100,6 +105,12 @@ AVAILABILITY_HANDLERS: dict[str, AvailabilityHandler] = {
         SERVICE_BY_NAME["traffic_manager"].availability_provider,
         SERVICE_BY_NAME["traffic_manager"].availability_description,
         check_traffic_manager,
+    ),
+    "api_management": AvailabilityHandler(
+        "api_management",
+        SERVICE_BY_NAME["api_management"].availability_provider,
+        SERVICE_BY_NAME["api_management"].availability_description,
+        check_api_management,
     ),
 }
 for storage_service in STORAGE_SERVICES:

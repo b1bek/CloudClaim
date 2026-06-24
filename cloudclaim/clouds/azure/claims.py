@@ -38,6 +38,10 @@ AUTO_LOCATIONS = (
     "centralindia",
     "brazilsouth",
 )
+APIM_PUBLISHER_NAME = "CloudClaim"
+APIM_PUBLISHER_EMAIL = "cloudclaim@example.invalid"
+
+
 def is_auto_location(location: str) -> bool:
     return not location or location.lower() == AUTO_LOCATION
 
@@ -50,6 +54,12 @@ def location_candidates(location: str) -> list[str]:
 
 def default_location(location: str) -> str:
     return location_candidates(location)[0]
+
+
+def claim_location(target_location: str, fallback_location: str) -> str:
+    if is_auto_location(target_location):
+        return default_location(fallback_location)
+    return default_location(target_location)
 
 
 def classify_claim_error(message: str) -> tuple[str, str]:
@@ -161,6 +171,33 @@ def claim_traffic_manager(target: AzureTarget, resource_group: str, fallback_loc
     return {"service": target.service, "name": target.name, "location": "global", "result": data}
 
 
+def claim_api_management(target: AzureTarget, resource_group: str, fallback_location: str) -> dict[str, Any]:
+    location = claim_location(target.location, fallback_location)
+    data = require_az(
+        *az_json(
+            [
+                "apim",
+                "create",
+                "-g",
+                resource_group,
+                "-n",
+                target.name,
+                "-l",
+                location,
+                "--sku-name",
+                "Consumption",
+                "--publisher-email",
+                APIM_PUBLISHER_EMAIL,
+                "--publisher-name",
+                APIM_PUBLISHER_NAME,
+            ],
+            timeout=1800,
+        ),
+        action="create API Management service",
+    )
+    return {"service": target.service, "name": target.name, "location": location, "sku": "Consumption", "result": data}
+
+
 def claim_app_service(target: AzureTarget, resource_group: str, fallback_location: str) -> dict[str, Any]:
     errors = []
     for location in location_candidates(target.location):
@@ -225,6 +262,11 @@ CLAIM_HANDLERS: dict[str, ClaimHandler] = {
         "traffic_manager",
         SERVICE_BY_NAME["traffic_manager"].claim_description,
         claim_traffic_manager,
+    ),
+    "api_management": ClaimHandler(
+        "api_management",
+        SERVICE_BY_NAME["api_management"].claim_description,
+        claim_api_management,
     ),
 }
 for storage_service in STORAGE_SERVICES:

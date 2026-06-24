@@ -37,6 +37,13 @@ SERVICE_SPECS = (
         claim_description="Create Traffic Manager profile with matching DNS name",
     ),
     AzureServiceSpec(
+        "api_management",
+        re.compile(r"^[a-z0-9-]+\.azure-api\.net$", re.I),
+        availability_provider="Microsoft.ApiManagement/service",
+        availability_description="API Management service name",
+        claim_description="Create Consumption API Management service",
+    ),
+    AzureServiceSpec(
         "blob_storage",
         re.compile(r"^[a-z0-9-]+\.blob\.core\.windows\.net$", re.I),
         availability_provider="Microsoft.Storage/storageAccounts",

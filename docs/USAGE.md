@@ -70,11 +70,17 @@ Current Azure claimable services:
 - `app_service`
 - `public_ip_dns_label`
 - `traffic_manager`
+- `api_management`
 - `blob_storage`
 - `static_website_storage`
 - `file_storage`
 - `queue_storage`
 - `table_storage`
+
+Azure CDN `*.azureedge.net` hostnames are intentionally unsupported because
+Azure CDN Standard from Microsoft (classic) no longer supports new profile
+creation. Azure Front Door Standard/Premium is the replacement service, but it
+uses a different default hostname suffix.
 
 Current AWS claimable services:
 
@@ -88,11 +94,13 @@ Check direct hostnames:
 uv run cloudclaim azure check cc-test-app.azurewebsites.net
 uv run cloudclaim azure check cc-test-label.eastus.cloudapp.azure.com
 uv run cloudclaim azure check cc-test-tm.trafficmanager.net
+uv run cloudclaim azure check cc-test-apim.azure-api.net
 uv run cloudclaim aws check cc-test-eb.us-east-1.elasticbeanstalk.com
 
 python3 -m cloudclaim azure check cc-test-app.azurewebsites.net
 python3 -m cloudclaim azure check cc-test-label.eastus.cloudapp.azure.com
 python3 -m cloudclaim azure check cc-test-tm.trafficmanager.net
+python3 -m cloudclaim azure check cc-test-apim.azure-api.net
 python3 -m cloudclaim aws check cc-test-eb.us-east-1.elasticbeanstalk.com
 ```
 
@@ -111,6 +119,7 @@ python3 -m cloudclaim aws check targets.txt
 ```text
 cc-test-app.azurewebsites.net [available] [azure] [app_service]
 cc-test-tm.trafficmanager.net [available] [azure] [traffic_manager]
+cc-test-apim.azure-api.net [available] [azure] [api_management]
 cc-test-eb.us-east-1.elasticbeanstalk.com [available] [aws] [elastic_beanstalk]
 cc-test-eb-parent.us-west-2.elasticbeanstalk.com [available] [aws] [elastic_beanstalk] [child:child.cc-test-eb-parent.us-west-2.elasticbeanstalk.com]
 cc-test-label.eastus.cloudapp.azure.com [not-available] [azure] [public_ip_dns_label]
@@ -152,10 +161,10 @@ python3 -m cloudclaim aws claim targets.txt
 Claim only selected service families:
 
 ```bash
-uv run cloudclaim azure claim targets.txt --services app_service,public_ip_dns_label,traffic_manager
+uv run cloudclaim azure claim targets.txt --services app_service,public_ip_dns_label,traffic_manager,api_management
 uv run cloudclaim aws claim targets.txt --services elastic_beanstalk
 
-python3 -m cloudclaim azure claim targets.txt --services app_service,public_ip_dns_label,traffic_manager
+python3 -m cloudclaim azure claim targets.txt --services app_service,public_ip_dns_label,traffic_manager,api_management
 python3 -m cloudclaim aws claim targets.txt --services elastic_beanstalk
 ```
 
@@ -187,6 +196,7 @@ Direct hostname inputs are accepted:
 cc-test-app.azurewebsites.net
 cc-test-label.eastus.cloudapp.azure.com
 cc-test-tm.trafficmanager.net
+cc-test-apim.azure-api.net
 ccteststorage.blob.core.windows.net
 ccteststorage.web.core.windows.net
 cc-test-eb.us-east-1.elasticbeanstalk.com
@@ -203,6 +213,7 @@ hostname
 cc-test-app.azurewebsites.net
 cc-test-label.eastus.cloudapp.azure.com
 cc-test-tm.trafficmanager.net
+cc-test-apim.azure-api.net
 ccteststorage.blob.core.windows.net
 ccteststorage.web.core.windows.net
 cc-test-eb.us-east-1.elasticbeanstalk.com

@@ -12,6 +12,7 @@ from unittest.mock import patch
 from cloudclaim.clouds.azure.commands import build_parser, run_check, run_claim, run_precheck, run_services, selected_services_from_arg
 from cloudclaim.clouds.azure.availability import (
     AVAILABILITY_HANDLERS,
+    check_api_management,
     check_target,
     check_targets,
     check_traffic_manager,
@@ -20,6 +21,7 @@ from cloudclaim.clouds.azure.availability import (
 from cloudclaim.clouds.azure.claims import (
     CLAIMABLE_SERVICES,
     CLAIM_HANDLERS,
+    claim_api_management,
     claim_app_service,
     claim_targets,
     claim_traffic_manager,
@@ -64,6 +66,14 @@ class HostnameClassificationTests(unittest.TestCase):
         self.assertEqual(target.name, "cc-test-tm")
         self.assertEqual(target.location, "auto")
 
+    def test_classifies_api_management(self) -> None:
+        target = classify_hostname("cc-test-apim.azure-api.net", "eastus2")
+        self.assertIsNotNone(target)
+        assert target is not None
+        self.assertEqual(target.service, "api_management")
+        self.assertEqual(target.name, "cc-test-apim")
+        self.assertEqual(target.location, "eastus2")
+
     def test_unsupported_azure_hostname_is_not_classified(self) -> None:
         self.assertIsNone(
             classify_hostname(
@@ -74,6 +84,8 @@ class HostnameClassificationTests(unittest.TestCase):
 
     def test_azureedge_is_not_classified(self) -> None:
         self.assertIsNone(classify_hostname("cc-test-edge.azureedge.net", "auto"))
+        self.assertIsNone(classify_hostname("cdnverify.cc-test-edge.azureedge.net", "auto"))
+        self.assertIsNone(classify_hostname("child.cc-test-edge.azureedge.net", "auto"))
 
     def test_ignores_wildcards(self) -> None:
         self.assertIsNone(classify_hostname("*.trafficmanager.net", "eastus"))
@@ -676,6 +688,22 @@ class ClaimCleanupBehaviorTests(unittest.TestCase):
         self.assertEqual(result["registration_status"], "available")
         self.assertIs(result["registration_available"], True)
 
+    def test_check_api_management_uses_provider_name_availability(self) -> None:
+        target = AzureTarget(
+            service="api_management",
+            azure_hostname="cc-test-apim.azure-api.net",
+            name="cc-test-apim",
+            location="auto",
+        )
+
+        with patch("cloudclaim.clouds.azure.availability.az_json", return_value=(True, {"nameAvailable": True})) as az_json:
+            result = check_api_management(target, "sub")
+
+        az_json.assert_called_once_with(["apim", "check-name", "--name", "cc-test-apim"], timeout=60)
+        self.assertEqual(result["registration_provider"], "Microsoft.ApiManagement/service")
+        self.assertEqual(result["registration_status"], "available")
+        self.assertIs(result["registration_available"], True)
+
     def test_claim_traffic_manager_creates_profile_with_unique_dns_name(self) -> None:
         target = AzureTarget(
             service="traffic_manager",
@@ -694,6 +722,28 @@ class ClaimCleanupBehaviorTests(unittest.TestCase):
         self.assertEqual(args[args.index("--unique-dns-name") + 1], "cc-test-tm")
         self.assertEqual(args[args.index("--routing-method") + 1], "Priority")
         self.assertEqual(result["location"], "global")
+
+    def test_claim_api_management_creates_consumption_service(self) -> None:
+        target = AzureTarget(
+            service="api_management",
+            azure_hostname="cc-test-apim.azure-api.net",
+            name="cc-test-apim",
+            location="westus2",
+        )
+
+        with patch("cloudclaim.clouds.azure.claims.az_json", return_value=(True, {"name": "cc-test-apim"})) as az_json:
+            result = claim_api_management(target, "rg-test", "auto")
+
+        az_json.assert_called_once()
+        args = az_json.call_args.args[0]
+        self.assertEqual(args[:3], ["apim", "create", "-g"])
+        self.assertEqual(args[args.index("-g") + 1], "rg-test")
+        self.assertEqual(args[args.index("-n") + 1], "cc-test-apim")
+        self.assertEqual(args[args.index("-l") + 1], "westus2")
+        self.assertEqual(args[args.index("--sku-name") + 1], "Consumption")
+        self.assertIn("--publisher-email", args)
+        self.assertEqual(result["location"], "westus2")
+        self.assertEqual(result["sku"], "Consumption")
 
     def test_claim_error_classifier_detects_quota(self) -> None:
         reason, hint = classify_claim_error("Operation cannot be completed without additional quota. Current Limit (Total VMs): 0")

@@ -44,11 +44,16 @@ Azure:
 - `app_service`
 - `public_ip_dns_label`
 - `traffic_manager`
+- `api_management`
 - `blob_storage`
 - `static_website_storage`
 - `file_storage`
 - `queue_storage`
 - `table_storage`
+
+Azure CDN `*.azureedge.net` hostnames are not claimable by CloudClaim because
+Azure CDN Standard from Microsoft (classic) no longer supports new profile
+creation. Replacement Front Door endpoints use a different hostname suffix.
 
 AWS:
 
@@ -62,6 +67,7 @@ Human output streams compact tagged lines:
 ```text
 cc-test-label.eastus.cloudapp.azure.com [available] [azure] [public_ip_dns_label]
 cc-test-tm.trafficmanager.net [available] [azure] [traffic_manager]
+cc-test-apim.azure-api.net [available] [azure] [api_management]
 cc-test-eb.us-east-1.elasticbeanstalk.com [not-available] [aws] [elastic_beanstalk]
 cc-test-eb-parent.us-west-2.elasticbeanstalk.com [available] [aws] [elastic_beanstalk] [child:child.cc-test-eb-parent.us-west-2.elasticbeanstalk.com]
 ```
