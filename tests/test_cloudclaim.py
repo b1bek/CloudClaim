@@ -10,8 +10,21 @@ from contextlib import redirect_stdout
 from unittest.mock import patch
 
 from cloudclaim.clouds.azure.commands import build_parser, run_check, run_claim, run_precheck, run_services, selected_services_from_arg
-from cloudclaim.clouds.azure.availability import AVAILABILITY_HANDLERS, check_target, check_targets, normalize_availability
-from cloudclaim.clouds.azure.claims import CLAIMABLE_SERVICES, CLAIM_HANDLERS, claim_app_service, claim_targets, classify_claim_error
+from cloudclaim.clouds.azure.availability import (
+    AVAILABILITY_HANDLERS,
+    check_target,
+    check_targets,
+    check_traffic_manager,
+    normalize_availability,
+)
+from cloudclaim.clouds.azure.claims import (
+    CLAIMABLE_SERVICES,
+    CLAIM_HANDLERS,
+    claim_app_service,
+    claim_targets,
+    claim_traffic_manager,
+    classify_claim_error,
+)
 from cloudclaim.clouds.azure.client import precheck as azure_precheck
 from cloudclaim.clouds.azure.inputs import load_targets
 from cloudclaim.clouds.azure.models import AzureTarget, ClaimHandler
@@ -22,37 +35,45 @@ from cloudclaim.core.output import print_banner, should_color, tag
 
 class HostnameClassificationTests(unittest.TestCase):
     def test_normalizes_urls_and_case(self) -> None:
-        self.assertEqual(normalize_hostname("HTTPS://Example.AzureWebsites.Net/path"), "example.azurewebsites.net")
+        self.assertEqual(normalize_hostname("HTTPS://Cc-Test-App.AzureWebsites.Net/path"), "cc-test-app.azurewebsites.net")
 
     def test_ignores_regional_app_service_stamp_hostname(self) -> None:
-        self.assertIsNone(classify_hostname("app.westeurope-01.azurewebsites.net", "eastus"))
+        self.assertIsNone(classify_hostname("cc-test-app-stamp.westeurope-01.azurewebsites.net", "eastus"))
 
     def test_classifies_global_app_service(self) -> None:
-        target = classify_hostname("app.azurewebsites.net", "eastus")
+        target = classify_hostname("cc-test-app.azurewebsites.net", "eastus")
         self.assertIsNotNone(target)
         assert target is not None
         self.assertEqual(target.service, "app_service")
-        self.assertEqual(target.name, "app")
+        self.assertEqual(target.name, "cc-test-app")
         self.assertEqual(target.location, "eastus")
 
     def test_classifies_public_ip_dns_label_location(self) -> None:
-        target = classify_hostname("name.eastus.cloudapp.azure.com", "westus")
+        target = classify_hostname("cc-test-label.eastus.cloudapp.azure.com", "westus")
         self.assertIsNotNone(target)
         assert target is not None
         self.assertEqual(target.service, "public_ip_dns_label")
-        self.assertEqual(target.name, "name")
+        self.assertEqual(target.name, "cc-test-label")
         self.assertEqual(target.location, "eastus")
+
+    def test_classifies_traffic_manager(self) -> None:
+        target = classify_hostname("cc-test-tm.trafficmanager.net", "auto")
+        self.assertIsNotNone(target)
+        assert target is not None
+        self.assertEqual(target.service, "traffic_manager")
+        self.assertEqual(target.name, "cc-test-tm")
+        self.assertEqual(target.location, "auto")
 
     def test_unsupported_azure_hostname_is_not_classified(self) -> None:
         self.assertIsNone(
             classify_hostname(
-                "aca-weu-uc-spjul002-dev-01.internal.agreeablefield-023f15a6.westeurope.azurecontainerapps.io",
+                "cc-test-container.internal.cc-test-env.westeurope.azurecontainerapps.io",
                 "auto",
             )
         )
 
     def test_azureedge_is_not_classified(self) -> None:
-        self.assertIsNone(classify_hostname("demo.azureedge.net", "auto"))
+        self.assertIsNone(classify_hostname("cc-test-edge.azureedge.net", "auto"))
 
     def test_ignores_wildcards(self) -> None:
         self.assertIsNone(classify_hostname("*.trafficmanager.net", "eastus"))
@@ -67,7 +88,7 @@ class InputParsingTests(unittest.TestCase):
                     [
                         "# comment",
                         "hostname",
-                        "demo.trafficmanager.net",
+                        "cc-test-tm-file.trafficmanager.net",
                         "not-azure.example.com",
                     ]
                 ),
@@ -78,42 +99,42 @@ class InputParsingTests(unittest.TestCase):
 
         self.assertEqual(
             [target.azure_hostname for target in targets],
-            ["demo.trafficmanager.net", "not-azure.example.com"],
+            ["cc-test-tm-file.trafficmanager.net", "not-azure.example.com"],
         )
-        self.assertEqual([target.service for target in targets], ["unsupported", "unsupported"])
+        self.assertEqual([target.service for target in targets], ["traffic_manager", "unsupported"])
 
     def test_load_targets_rejects_non_txt_file(self) -> None:
         with TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "hosts.json"
-            path.write_text('["demo.azurewebsites.net"]', encoding="utf-8")
+            path.write_text('["cc-test-app.azurewebsites.net"]', encoding="utf-8")
 
             with self.assertRaises(SystemExit):
                 load_targets([str(path)], "auto")
 
     def test_direct_regional_app_service_input_is_unsupported(self) -> None:
-        targets = load_targets(["app.westeurope-01.azurewebsites.net"], "auto")
+        targets = load_targets(["cc-test-app-stamp.westeurope-01.azurewebsites.net"], "auto")
 
         self.assertEqual(len(targets), 1)
         self.assertEqual(targets[0].service, "unsupported")
-        self.assertEqual(targets[0].azure_hostname, "app.westeurope-01.azurewebsites.net")
+        self.assertEqual(targets[0].azure_hostname, "cc-test-app-stamp.westeurope-01.azurewebsites.net")
 
 
 class OutputFormattingTests(unittest.TestCase):
     def test_location_defaults_to_auto(self) -> None:
         parser = build_parser(prog="cloudclaim azure")
-        args = parser.parse_args(["check", "randomtesting009.azurewebsites.net"])
+        args = parser.parse_args(["check", "cc-test-app.azurewebsites.net"])
 
         self.assertEqual(args.location, "auto")
 
     def test_location_can_be_set_after_command(self) -> None:
         parser = build_parser(prog="cloudclaim azure")
-        args = parser.parse_args(["claim", "randomtesting009.azurewebsites.net", "--location", "westus"])
+        args = parser.parse_args(["claim", "cc-test-app.azurewebsites.net", "--location", "westus"])
 
         self.assertEqual(args.location, "westus")
 
     def test_location_can_be_set_before_command(self) -> None:
         parser = build_parser(prog="cloudclaim azure")
-        args = parser.parse_args(["--location", "westus2", "claim", "randomtesting009.azurewebsites.net"])
+        args = parser.parse_args(["--location", "westus2", "claim", "cc-test-app.azurewebsites.net"])
 
         self.assertEqual(args.location, "westus2")
 
@@ -177,19 +198,19 @@ class OutputFormattingTests(unittest.TestCase):
             print_check_results(
                 [
                     {
-                        "azure_hostname": "name.eastus.cloudapp.azure.com",
+                        "azure_hostname": "cc-test-label.eastus.cloudapp.azure.com",
                         "azure_service": "public_ip_dns_label",
                         "registration_available": True,
                         "registration_checked_location": "eastus",
-                        "registration_checked_name": "name",
+                        "registration_checked_name": "cc-test-label",
                     }
                 ]
-        )
+            )
 
         text = output.getvalue()
         self.assertIn("[INF] azure check: 1/1 available", text)
         self.assertIn(
-            "name.eastus.cloudapp.azure.com [available] [azure] [public_ip_dns_label]",
+            "cc-test-label.eastus.cloudapp.azure.com [available] [azure] [public_ip_dns_label]",
             text,
         )
 
@@ -199,11 +220,11 @@ class OutputFormattingTests(unittest.TestCase):
             print_check_results(
                 [
                     {
-                        "azure_hostname": "name.eastus.cloudapp.azure.com",
+                        "azure_hostname": "cc-test-label.eastus.cloudapp.azure.com",
                         "azure_service": "public_ip_dns_label",
                         "registration_available": True,
                         "registration_checked_location": "eastus",
-                        "registration_checked_name": "name",
+                        "registration_checked_name": "cc-test-label",
                     }
                 ],
                 color=True,
@@ -228,11 +249,11 @@ class OutputFormattingTests(unittest.TestCase):
             print_check_results(
                 [
                     {
-                        "azure_hostname": "name.eastus.cloudapp.azure.com",
+                        "azure_hostname": "cc-test-label.eastus.cloudapp.azure.com",
                         "azure_service": "public_ip_dns_label",
                         "registration_available": True,
                         "registration_checked_location": "eastus",
-                        "registration_checked_name": "name",
+                        "registration_checked_name": "cc-test-label",
                     }
                 ],
                 json_output=True,
@@ -240,7 +261,7 @@ class OutputFormattingTests(unittest.TestCase):
 
         payload = json.loads(output.getvalue())
         self.assertIs(payload["available"], True)
-        self.assertEqual(payload["hostname"], "name.eastus.cloudapp.azure.com")
+        self.assertEqual(payload["hostname"], "cc-test-label.eastus.cloudapp.azure.com")
 
     def test_print_check_results_treats_unknown_availability_as_false(self) -> None:
         output = io.StringIO()
@@ -256,7 +277,7 @@ class OutputFormattingTests(unittest.TestCase):
             print_check_results(
                 [
                     {
-                        "azure_hostname": "aca-weu-uc-spjul002-dev-01.internal.agreeablefield-023f15a6.westeurope.azurecontainerapps.io",
+                        "azure_hostname": "cc-test-container.internal.cc-test-env.westeurope.azurecontainerapps.io",
                         "azure_service": "unsupported",
                         "registration_available": "",
                         "registration_status": "unsupported",
@@ -265,7 +286,7 @@ class OutputFormattingTests(unittest.TestCase):
             )
 
         self.assertIn(
-            "aca-weu-uc-spjul002-dev-01.internal.agreeablefield-023f15a6.westeurope.azurecontainerapps.io [unsupported] [azure] [unsupported]",
+            "cc-test-container.internal.cc-test-env.westeurope.azurecontainerapps.io [unsupported] [azure] [unsupported]",
             output.getvalue(),
         )
 
@@ -275,19 +296,19 @@ class OutputFormattingTests(unittest.TestCase):
             print_check_results(
                 [
                     {
-                        "azure_hostname": "demo.eastus.cloudapp.azure.com",
+                        "azure_hostname": "cc-test-label-used.eastus.cloudapp.azure.com",
                         "azure_service": "public_ip_dns_label",
                         "registration_available": False,
                         "registration_checked_location": "eastus",
-                        "registration_checked_name": "demo",
+                        "registration_checked_name": "cc-test-label-used",
                         "registration_status": "not_available",
                     }
                 ]
-        )
+            )
 
         text = output.getvalue()
         self.assertIn("[INF] azure check: 0/1 available", text)
-        self.assertIn("demo.eastus.cloudapp.azure.com [not-available] [azure] [public_ip_dns_label]", text)
+        self.assertIn("cc-test-label-used.eastus.cloudapp.azure.com [not-available] [azure] [public_ip_dns_label]", text)
 
     def test_print_claim_result_outputs_normal_text_by_default(self) -> None:
         output = io.StringIO()
@@ -297,23 +318,23 @@ class OutputFormattingTests(unittest.TestCase):
                     "resource_group": "rg-cloudclaim-azure-test",
                     "results": [
                         {
-                            "azure_hostname": "name.eastus.cloudapp.azure.com",
+                            "azure_hostname": "cc-test-label.eastus.cloudapp.azure.com",
                             "azure_service": "public_ip_dns_label",
                             "registration_available": True,
                             "registration_checked_location": "eastus",
-                            "registration_checked_name": "name",
+                            "registration_checked_name": "cc-test-label",
                             "status": "claimed",
                         }
                     ],
                     "cleanup_started": True,
                     "cleanup_command": "az group delete -n rg-cloudclaim-azure-test --yes --no-wait",
                 }
-        )
+            )
 
         lines = output.getvalue().splitlines()
         self.assertEqual(lines[0], "[INF] azure claim: 1/1 claimed, 1/1 attempted")
         self.assertIn(
-            "name.eastus.cloudapp.azure.com [claimed] [azure] [public_ip_dns_label] [rg:rg-cloudclaim-azure-test]",
+            "cc-test-label.eastus.cloudapp.azure.com [claimed] [azure] [public_ip_dns_label] [rg:rg-cloudclaim-azure-test]",
             output.getvalue(),
         )
         self.assertNotIn("cleanup failed", output.getvalue())
@@ -327,11 +348,11 @@ class OutputFormattingTests(unittest.TestCase):
                     "resource_group": "rg-cloudclaim-azure-test",
                     "results": [
                         {
-                            "azure_hostname": "xyz-testing-009.eastus.cloudapp.azure.com",
+                            "azure_hostname": "cc-test-label-unavailable.eastus.cloudapp.azure.com",
                             "azure_service": "public_ip_dns_label",
                             "registration_available": False,
                             "registration_checked_location": "eastus",
-                            "registration_checked_name": "xyz-testing-009",
+                            "registration_checked_name": "cc-test-label-unavailable",
                             "registration_status": "not_available",
                             "status": "not_claimed",
                             "message": "Azure availability check did not return available",
@@ -341,8 +362,8 @@ class OutputFormattingTests(unittest.TestCase):
             )
 
         text = output.getvalue()
-        self.assertIn("xyz-testing-009.eastus.cloudapp.azure.com [not-available] [azure] [public_ip_dns_label]", text)
-        self.assertNotIn("[xyz-testing-009]", text)
+        self.assertIn("cc-test-label-unavailable.eastus.cloudapp.azure.com [not-available] [azure] [public_ip_dns_label]", text)
+        self.assertNotIn("[cc-test-label-unavailable]", text)
         self.assertNotIn("[eastus]", text)
         self.assertNotIn("Azure availability check did not return available", text)
 
@@ -354,11 +375,11 @@ class OutputFormattingTests(unittest.TestCase):
                     "resource_group": "rg-cloudclaim-azure-test",
                     "results": [
                         {
-                            "azure_hostname": "aca-weu-uc-spjul002-dev-01.internal.agreeablefield-023f15a6.westeurope.azurecontainerapps.io",
+                            "azure_hostname": "cc-test-container.internal.cc-test-env.westeurope.azurecontainerapps.io",
                             "azure_service": "unsupported",
                             "registration_available": "",
                             "registration_checked_location": "westeurope",
-                            "registration_checked_name": "aca-weu-uc-spjul002-dev-01",
+                            "registration_checked_name": "cc-test-container",
                             "registration_status": "unsupported",
                             "status": "unsupported_claim",
                             "message": "no claim handler for this Azure service",
@@ -369,7 +390,7 @@ class OutputFormattingTests(unittest.TestCase):
 
         text = output.getvalue()
         self.assertIn(
-            "aca-weu-uc-spjul002-dev-01.internal.agreeablefield-023f15a6.westeurope.azurecontainerapps.io [unsupported] [azure] [unsupported]",
+            "cc-test-container.internal.cc-test-env.westeurope.azurecontainerapps.io [unsupported] [azure] [unsupported]",
             text,
         )
         self.assertNotIn("[not-available]", text)
@@ -382,11 +403,11 @@ class OutputFormattingTests(unittest.TestCase):
                     "resource_group": "rg-cloudclaim-azure-test",
                     "results": [
                         {
-                            "azure_hostname": "pltn-gwc-prd-01.eastus.cloudapp.azure.com",
+                            "azure_hostname": "cc-test-label-01.eastus.cloudapp.azure.com",
                             "azure_service": "public_ip_dns_label",
                             "registration_available": False,
                             "registration_checked_location": "eastus",
-                            "registration_checked_name": "pltn-gwc-prd-01",
+                            "registration_checked_name": "cc-test-label-01",
                             "registration_status": "not_available",
                             "status": "not_claimed",
                             "message": "Azure reported the name is not available",
@@ -396,7 +417,7 @@ class OutputFormattingTests(unittest.TestCase):
             )
 
         text = output.getvalue()
-        self.assertIn("pltn-gwc-prd-01.eastus.cloudapp.azure.com [not-available] [azure] [public_ip_dns_label]", text)
+        self.assertIn("cc-test-label-01.eastus.cloudapp.azure.com [not-available] [azure] [public_ip_dns_label]", text)
         self.assertNotIn("[claim:failed]", text)
         self.assertNotIn("Azure reported the name is not available", text)
 
@@ -408,11 +429,11 @@ class OutputFormattingTests(unittest.TestCase):
                     "resource_group": "rg-cloudclaim-azure-test",
                     "results": [
                         {
-                            "azure_hostname": "eqwdfeqwfewklq-random.azurewebsites.net",
+                            "azure_hostname": "cc-test-app-quota.azurewebsites.net",
                             "azure_service": "app_service",
                             "registration_available": True,
                             "registration_checked_location": "eastus",
-                            "registration_checked_name": "eqwdfeqwfewklq-random",
+                            "registration_checked_name": "cc-test-app-quota",
                             "registration_status": "available",
                             "status": "claim_failed",
                             "failure_reason": "quota",
@@ -424,7 +445,7 @@ class OutputFormattingTests(unittest.TestCase):
             )
 
         self.assertIn(
-            "eqwdfeqwfewklq-random.azurewebsites.net [failed] [azure] [app_service] [rg:rg-cloudclaim-azure-test] [claim:failed] [quota] [region:eastus] create App Service plan failed: quota exceeded",
+            "cc-test-app-quota.azurewebsites.net [failed] [azure] [app_service] [rg:rg-cloudclaim-azure-test] [claim:failed] [quota] [region:eastus] create App Service plan failed: quota exceeded",
             output.getvalue(),
         )
         self.assertIn("[hint] Azure quota blocked proof resource creation.", output.getvalue())
@@ -437,7 +458,7 @@ class OutputFormattingTests(unittest.TestCase):
                     "resource_group": "rg-cloudclaim-azure-test",
                     "results": [
                         {
-                            "azure_hostname": "name.eastus.cloudapp.azure.com",
+                            "azure_hostname": "cc-test-label.eastus.cloudapp.azure.com",
                             "registration_available": True,
                             "status": "claimed",
                         }
@@ -457,7 +478,7 @@ class OutputFormattingTests(unittest.TestCase):
                     "resource_group": "rg-cloudclaim-azure-test",
                     "results": [
                         {
-                            "azure_hostname": "name.eastus.cloudapp.azure.com",
+                            "azure_hostname": "cc-test-label.eastus.cloudapp.azure.com",
                             "registration_available": True,
                             "status": "claimed",
                         }
@@ -486,11 +507,11 @@ class OutputFormattingTests(unittest.TestCase):
                     "resource_group": "rg-cloudclaim-azure-test",
                     "results": [
                         {
-                            "azure_hostname": "name.eastus.cloudapp.azure.com",
+                            "azure_hostname": "cc-test-label.eastus.cloudapp.azure.com",
                             "azure_service": "public_ip_dns_label",
                             "registration_available": True,
                             "registration_checked_location": "eastus",
-                            "registration_checked_name": "name",
+                            "registration_checked_name": "cc-test-label",
                             "status": "claimed",
                         }
                     ],
@@ -518,7 +539,7 @@ class OutputFormattingTests(unittest.TestCase):
                     "resource_group": "rg-cloudclaim-azure-test",
                     "results": [
                         {
-                            "azure_hostname": "name.eastus.cloudapp.azure.com",
+                            "azure_hostname": "cc-test-label.eastus.cloudapp.azure.com",
                             "registration_available": False,
                             "registration_status": "not_available",
                             "status": "not_claimed",
@@ -539,11 +560,11 @@ class OutputFormattingTests(unittest.TestCase):
     def test_run_check_streams_results_before_backend_returns(self) -> None:
         output = io.StringIO()
         item = {
-            "azure_hostname": "name.eastus.cloudapp.azure.com",
+            "azure_hostname": "cc-test-label.eastus.cloudapp.azure.com",
             "azure_service": "public_ip_dns_label",
             "registration_available": True,
             "registration_checked_location": "eastus",
-            "registration_checked_name": "name",
+            "registration_checked_name": "cc-test-label",
             "registration_status": "available",
         }
 
@@ -551,10 +572,10 @@ class OutputFormattingTests(unittest.TestCase):
             self.assertIn("azure check: 1 target", output.getvalue())
             assert on_result is not None
             on_result(item)
-            self.assertIn("name.eastus.cloudapp.azure.com [available] [azure] [public_ip_dns_label]", output.getvalue())
+            self.assertIn("cc-test-label.eastus.cloudapp.azure.com [available] [azure] [public_ip_dns_label]", output.getvalue())
             return [item]
 
-        args = Namespace(inputs=["name.eastus.cloudapp.azure.com"], location="eastus", json=False, out=None, color=False, no_color=True)
+        args = Namespace(inputs=["cc-test-label.eastus.cloudapp.azure.com"], location="eastus", json=False, out=None, color=False, no_color=True)
         with (
             redirect_stdout(output),
             patch("cloudclaim.clouds.azure.commands.load_targets", return_value=[object()]),
@@ -564,7 +585,7 @@ class OutputFormattingTests(unittest.TestCase):
 
     def test_run_check_prechecks_supported_targets(self) -> None:
         output = io.StringIO()
-        target = AzureTarget("public_ip_dns_label", "name.eastus.cloudapp.azure.com", "name", "eastus")
+        target = AzureTarget("public_ip_dns_label", "cc-test-label.eastus.cloudapp.azure.com", "cc-test-label", "eastus")
 
         with (
             redirect_stdout(output),
@@ -572,13 +593,13 @@ class OutputFormattingTests(unittest.TestCase):
             patch("cloudclaim.clouds.azure.commands.precheck", return_value={"ok": True, "provider": "azure", "subscription_id": "sub", "subscription_name": "Subscription"}),
             patch("cloudclaim.clouds.azure.commands.check_targets", return_value=[]),
         ):
-            self.assertEqual(run_check(Namespace(inputs=["name.eastus.cloudapp.azure.com"], location="eastus", json=False, out=None, color=False, no_color=True)), 0)
+            self.assertEqual(run_check(Namespace(inputs=["cc-test-label.eastus.cloudapp.azure.com"], location="eastus", json=False, out=None, color=False, no_color=True)), 0)
 
         self.assertIn("[INF] azure precheck: ok [Subscription]", output.getvalue())
 
     def test_run_check_skips_precheck_for_unsupported_only(self) -> None:
         output = io.StringIO()
-        target = AzureTarget("unsupported", "demo.trafficmanager.net", "", "auto")
+        target = AzureTarget("unsupported", "cc-test-frontdoor.azurefd.net", "", "auto")
 
         with (
             redirect_stdout(output),
@@ -586,18 +607,18 @@ class OutputFormattingTests(unittest.TestCase):
             patch("cloudclaim.clouds.azure.commands.precheck") as precheck_mock,
             patch("cloudclaim.clouds.azure.commands.check_targets", return_value=[]),
         ):
-            self.assertEqual(run_check(Namespace(inputs=["demo.trafficmanager.net"], location="auto", json=False, out=None, color=False, no_color=True)), 0)
+            self.assertEqual(run_check(Namespace(inputs=["cc-test-frontdoor.azurefd.net"], location="auto", json=False, out=None, color=False, no_color=True)), 0)
 
         precheck_mock.assert_not_called()
 
     def test_run_claim_streams_results_before_backend_returns(self) -> None:
         output = io.StringIO()
         item = {
-            "azure_hostname": "name.eastus.cloudapp.azure.com",
+            "azure_hostname": "cc-test-label.eastus.cloudapp.azure.com",
             "azure_service": "public_ip_dns_label",
             "registration_available": True,
             "registration_checked_location": "eastus",
-            "registration_checked_name": "name",
+            "registration_checked_name": "cc-test-label",
             "registration_status": "available",
             "status": "claimed",
         }
@@ -607,13 +628,13 @@ class OutputFormattingTests(unittest.TestCase):
             current_result = {"resource_group": "rg-cloudclaim-azure-test", "results": [item]}
             kwargs["on_result"](item, current_result)
             self.assertIn(
-                "name.eastus.cloudapp.azure.com [claimed] [azure] [public_ip_dns_label] [rg:rg-cloudclaim-azure-test]",
+                "cc-test-label.eastus.cloudapp.azure.com [claimed] [azure] [public_ip_dns_label] [rg:rg-cloudclaim-azure-test]",
                 output.getvalue(),
             )
             return current_result
 
         args = Namespace(
-            inputs=["name.eastus.cloudapp.azure.com"],
+            inputs=["cc-test-label.eastus.cloudapp.azure.com"],
             location="eastus",
             resource_group="rg-cloudclaim-azure-test",
             services=None,
@@ -636,6 +657,44 @@ class ClaimCleanupBehaviorTests(unittest.TestCase):
         self.assertNotIn("made_up_service", AVAILABILITY_HANDLERS)
         self.assertNotIn("made_up_service", CLAIM_HANDLERS)
 
+    def test_check_traffic_manager_uses_provider_dns_availability(self) -> None:
+        target = AzureTarget(
+            service="traffic_manager",
+            azure_hostname="cc-test-tm.trafficmanager.net",
+            name="cc-test-tm",
+            location="auto",
+        )
+
+        with patch("cloudclaim.clouds.azure.availability.az_json", return_value=(True, {"nameAvailable": True})) as az_json:
+            result = check_traffic_manager(target, "sub")
+
+        az_json.assert_called_once_with(
+            ["network", "traffic-manager", "profile", "check-dns", "--name", "cc-test-tm"],
+            timeout=60,
+        )
+        self.assertEqual(result["registration_provider"], "Microsoft.Network/trafficManagerProfiles")
+        self.assertEqual(result["registration_status"], "available")
+        self.assertIs(result["registration_available"], True)
+
+    def test_claim_traffic_manager_creates_profile_with_unique_dns_name(self) -> None:
+        target = AzureTarget(
+            service="traffic_manager",
+            azure_hostname="cc-test-tm.trafficmanager.net",
+            name="cc-test-tm",
+            location="auto",
+        )
+
+        with patch("cloudclaim.clouds.azure.claims.az_json", return_value=(True, {"name": "cc-test-tm"})) as az_json:
+            result = claim_traffic_manager(target, "rg-test", "auto")
+
+        args = az_json.call_args.args[0]
+        self.assertEqual(args[:4], ["network", "traffic-manager", "profile", "create"])
+        self.assertEqual(args[args.index("-g") + 1], "rg-test")
+        self.assertEqual(args[args.index("-n") + 1], "cc-test-tm")
+        self.assertEqual(args[args.index("--unique-dns-name") + 1], "cc-test-tm")
+        self.assertEqual(args[args.index("--routing-method") + 1], "Priority")
+        self.assertEqual(result["location"], "global")
+
     def test_claim_error_classifier_detects_quota(self) -> None:
         reason, hint = classify_claim_error("Operation cannot be completed without additional quota. Current Limit (Total VMs): 0")
 
@@ -643,7 +702,7 @@ class ClaimCleanupBehaviorTests(unittest.TestCase):
         self.assertIn("--location", hint)
 
     def test_claim_error_classifier_detects_not_available(self) -> None:
-        reason, hint = classify_claim_error("Label 'x' is not available in 'x.trafficmanager.net'")
+        reason, hint = classify_claim_error("Label 'cc-test-tm' is not available in 'cc-test-tm.trafficmanager.net'")
 
         self.assertEqual(reason, "not_available")
         self.assertEqual(hint, "")
@@ -651,8 +710,8 @@ class ClaimCleanupBehaviorTests(unittest.TestCase):
     def test_availability_normalizer_detects_not_available_message(self) -> None:
         target = AzureTarget(
             service="public_ip_dns_label",
-            azure_hostname="pltn-gwc-prd-01.eastus.cloudapp.azure.com",
-            name="pltn-gwc-prd-01",
+            azure_hostname="cc-test-label-01.eastus.cloudapp.azure.com",
+            name="cc-test-label-01",
             location="eastus",
         )
 
@@ -669,7 +728,7 @@ class ClaimCleanupBehaviorTests(unittest.TestCase):
     def test_check_target_reports_unknown_services_as_unsupported(self) -> None:
         target = AzureTarget(
             service="unsupported",
-            azure_hostname="demo.azurefd.net",
+            azure_hostname="cc-test-frontdoor.azurefd.net",
             name="",
             location="auto",
         )
@@ -683,7 +742,7 @@ class ClaimCleanupBehaviorTests(unittest.TestCase):
     def test_check_targets_does_not_read_subscription_for_unsupported_only(self) -> None:
         target = AzureTarget(
             service="unsupported",
-            azure_hostname="app.westeurope-01.azurewebsites.net",
+            azure_hostname="cc-test-app-stamp.westeurope-01.azurewebsites.net",
             name="",
             location="auto",
         )
@@ -697,8 +756,8 @@ class ClaimCleanupBehaviorTests(unittest.TestCase):
     def test_app_service_auto_location_retries_quota_failure(self) -> None:
         target = AzureTarget(
             service="app_service",
-            azure_hostname="randomtesting009.azurewebsites.net",
-            name="randomtesting009",
+            azure_hostname="cc-test-app.azurewebsites.net",
+            name="cc-test-app",
             location="auto",
         )
         calls = []
@@ -722,8 +781,8 @@ class ClaimCleanupBehaviorTests(unittest.TestCase):
     def test_app_service_quota_reuses_existing_same_region_plan(self) -> None:
         target = AzureTarget(
             service="app_service",
-            azure_hostname="tic-chatbot-esfpcearctf0cqga.japaneast-01.azurewebsites.net",
-            name="tic-chatbot-esfpcearctf0cqga",
+            azure_hostname="cc-test-app-existing.japaneast-01.azurewebsites.net",
+            name="cc-test-app-existing",
             location="japaneast",
         )
         calls = []
@@ -733,7 +792,7 @@ class ClaimCleanupBehaviorTests(unittest.TestCase):
             if args[:3] == ["appservice", "plan", "create"]:
                 return False, {"stderr": "Operation cannot be completed without additional quota. Current Limit (Total VMs): 0"}
             if args[:2] == ["webapp", "create"]:
-                return True, {"defaultHostName": "tic-chatbot-esfpcearctf0cqga.azurewebsites.net"}
+                return True, {"defaultHostName": "cc-test-app-existing.azurewebsites.net"}
             return True, {}
 
         existing_plan = {
@@ -758,8 +817,8 @@ class ClaimCleanupBehaviorTests(unittest.TestCase):
     def test_claim_keeps_resources_by_default(self) -> None:
         target = AzureTarget(
             service="public_ip_dns_label",
-            azure_hostname="name.eastus.cloudapp.azure.com",
-            name="name",
+            azure_hostname="cc-test-label.eastus.cloudapp.azure.com",
+            name="cc-test-label",
             location="eastus",
         )
         handler = ClaimHandler("public_ip_dns_label", "test", lambda target, rg, loc: {"resource_group": rg})
@@ -792,8 +851,8 @@ class ClaimCleanupBehaviorTests(unittest.TestCase):
     def test_claim_deletes_only_when_cleanup_requested(self) -> None:
         target = AzureTarget(
             service="public_ip_dns_label",
-            azure_hostname="name.eastus.cloudapp.azure.com",
-            name="name",
+            azure_hostname="cc-test-label.eastus.cloudapp.azure.com",
+            name="cc-test-label",
             location="eastus",
         )
         handler = ClaimHandler("public_ip_dns_label", "test", lambda target, rg, loc: {"resource_group": rg})
@@ -824,8 +883,8 @@ class ClaimCleanupBehaviorTests(unittest.TestCase):
     def test_claim_create_time_not_available_becomes_not_claimed(self) -> None:
         target = AzureTarget(
             service="public_ip_dns_label",
-            azure_hostname="pltn-gwc-prd-01.eastus.cloudapp.azure.com",
-            name="pltn-gwc-prd-01",
+            azure_hostname="cc-test-label-01.eastus.cloudapp.azure.com",
+            name="cc-test-label-01",
             location="eastus",
         )
         handler = ClaimHandler("public_ip_dns_label", "test", lambda target, rg, loc: (_ for _ in ()).throw(RuntimeError("DNS name label is not available.")))
@@ -856,8 +915,8 @@ class ClaimCleanupBehaviorTests(unittest.TestCase):
     def test_claim_does_not_attempt_without_plain_available(self) -> None:
         target = AzureTarget(
             service="public_ip_dns_label",
-            azure_hostname="demo.eastus.cloudapp.azure.com",
-            name="demo",
+            azure_hostname="cc-test-label-used.eastus.cloudapp.azure.com",
+            name="cc-test-label-used",
             location="eastus",
         )
         handler = ClaimHandler("public_ip_dns_label", "test", lambda target, rg, loc: {"resource_group": rg})
@@ -886,7 +945,7 @@ class ClaimCleanupBehaviorTests(unittest.TestCase):
     def test_claim_does_not_read_subscription_for_unsupported_only(self) -> None:
         target = AzureTarget(
             service="unsupported",
-            azure_hostname="app.westeurope-01.azurewebsites.net",
+            azure_hostname="cc-test-app-stamp.westeurope-01.azurewebsites.net",
             name="",
             location="auto",
         )

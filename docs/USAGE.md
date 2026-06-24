@@ -69,6 +69,7 @@ Current Azure claimable services:
 
 - `app_service`
 - `public_ip_dns_label`
+- `traffic_manager`
 - `blob_storage`
 - `static_website_storage`
 - `file_storage`
@@ -84,13 +85,15 @@ Current AWS claimable services:
 Check direct hostnames:
 
 ```bash
-uv run cloudclaim azure check app.azurewebsites.net
-uv run cloudclaim azure check name.eastus.cloudapp.azure.com
-uv run cloudclaim aws check cloudclaim-eb-target.us-east-1.elasticbeanstalk.com
+uv run cloudclaim azure check cc-test-app.azurewebsites.net
+uv run cloudclaim azure check cc-test-label.eastus.cloudapp.azure.com
+uv run cloudclaim azure check cc-test-tm.trafficmanager.net
+uv run cloudclaim aws check cc-test-eb.us-east-1.elasticbeanstalk.com
 
-python3 -m cloudclaim azure check app.azurewebsites.net
-python3 -m cloudclaim azure check name.eastus.cloudapp.azure.com
-python3 -m cloudclaim aws check cloudclaim-eb-target.us-east-1.elasticbeanstalk.com
+python3 -m cloudclaim azure check cc-test-app.azurewebsites.net
+python3 -m cloudclaim azure check cc-test-label.eastus.cloudapp.azure.com
+python3 -m cloudclaim azure check cc-test-tm.trafficmanager.net
+python3 -m cloudclaim aws check cc-test-eb.us-east-1.elasticbeanstalk.com
 ```
 
 Check files:
@@ -106,10 +109,11 @@ python3 -m cloudclaim aws check targets.txt
 `check` output is streamed per target:
 
 ```text
-app.azurewebsites.net [available] [azure] [app_service]
-cloudclaim-eb-target.us-east-1.elasticbeanstalk.com [available] [aws] [elastic_beanstalk]
-demo-parent.us-west-2.elasticbeanstalk.com [available] [aws] [elastic_beanstalk] [child:child.demo-parent.us-west-2.elasticbeanstalk.com]
-name.eastus.cloudapp.azure.com [not-available] [azure] [public_ip_dns_label]
+cc-test-app.azurewebsites.net [available] [azure] [app_service]
+cc-test-tm.trafficmanager.net [available] [azure] [traffic_manager]
+cc-test-eb.us-east-1.elasticbeanstalk.com [available] [aws] [elastic_beanstalk]
+cc-test-eb-parent.us-west-2.elasticbeanstalk.com [available] [aws] [elastic_beanstalk] [child:child.cc-test-eb-parent.us-west-2.elasticbeanstalk.com]
+cc-test-label.eastus.cloudapp.azure.com [not-available] [azure] [public_ip_dns_label]
 ```
 
 Use JSON lines:
@@ -148,31 +152,31 @@ python3 -m cloudclaim aws claim targets.txt
 Claim only selected service families:
 
 ```bash
-uv run cloudclaim azure claim targets.txt --services app_service,public_ip_dns_label
+uv run cloudclaim azure claim targets.txt --services app_service,public_ip_dns_label,traffic_manager
 uv run cloudclaim aws claim targets.txt --services elastic_beanstalk
 
-python3 -m cloudclaim azure claim targets.txt --services app_service,public_ip_dns_label
+python3 -m cloudclaim azure claim targets.txt --services app_service,public_ip_dns_label,traffic_manager
 python3 -m cloudclaim aws claim targets.txt --services elastic_beanstalk
 ```
 
 Keep resources by default:
 
 ```bash
-uv run cloudclaim azure claim name.eastus.cloudapp.azure.com
-uv run cloudclaim aws claim cloudclaim-eb-target.us-east-1.elasticbeanstalk.com
+uv run cloudclaim azure claim cc-test-label.eastus.cloudapp.azure.com
+uv run cloudclaim aws claim cc-test-eb.us-east-1.elasticbeanstalk.com
 
-python3 -m cloudclaim azure claim name.eastus.cloudapp.azure.com
-python3 -m cloudclaim aws claim cloudclaim-eb-target.us-east-1.elasticbeanstalk.com
+python3 -m cloudclaim azure claim cc-test-label.eastus.cloudapp.azure.com
+python3 -m cloudclaim aws claim cc-test-eb.us-east-1.elasticbeanstalk.com
 ```
 
 Start cleanup after claim:
 
 ```bash
-uv run cloudclaim azure claim name.eastus.cloudapp.azure.com --cleanup
-uv run cloudclaim aws claim cloudclaim-eb-target.us-east-1.elasticbeanstalk.com --cleanup
+uv run cloudclaim azure claim cc-test-label.eastus.cloudapp.azure.com --cleanup
+uv run cloudclaim aws claim cc-test-eb.us-east-1.elasticbeanstalk.com --cleanup
 
-python3 -m cloudclaim azure claim name.eastus.cloudapp.azure.com --cleanup
-python3 -m cloudclaim aws claim cloudclaim-eb-target.us-east-1.elasticbeanstalk.com --cleanup
+python3 -m cloudclaim azure claim cc-test-label.eastus.cloudapp.azure.com --cleanup
+python3 -m cloudclaim aws claim cc-test-eb.us-east-1.elasticbeanstalk.com --cleanup
 ```
 
 ## Input Formats
@@ -180,11 +184,12 @@ python3 -m cloudclaim aws claim cloudclaim-eb-target.us-east-1.elasticbeanstalk.
 Direct hostname inputs are accepted:
 
 ```text
-app.azurewebsites.net
-name.eastus.cloudapp.azure.com
-storageacct.blob.core.windows.net
-storageacct.web.core.windows.net
-cloudclaim-eb-target.us-east-1.elasticbeanstalk.com
+cc-test-app.azurewebsites.net
+cc-test-label.eastus.cloudapp.azure.com
+cc-test-tm.trafficmanager.net
+ccteststorage.blob.core.windows.net
+ccteststorage.web.core.windows.net
+cc-test-eb.us-east-1.elasticbeanstalk.com
 ```
 
 File input is `.txt` only. Each non-empty line is treated as one hostname.
@@ -195,11 +200,12 @@ Example:
 
 ```text
 hostname
-app.azurewebsites.net
-name.eastus.cloudapp.azure.com
-storageacct.blob.core.windows.net
-storageacct.web.core.windows.net
-cloudclaim-eb-target.us-east-1.elasticbeanstalk.com
+cc-test-app.azurewebsites.net
+cc-test-label.eastus.cloudapp.azure.com
+cc-test-tm.trafficmanager.net
+ccteststorage.blob.core.windows.net
+ccteststorage.web.core.windows.net
+cc-test-eb.us-east-1.elasticbeanstalk.com
 ```
 
 Existing files with other extensions, such as `.csv`, `.json`, `.jsonl`,

@@ -77,9 +77,9 @@ existing `--services` validation will reject anything outside that set.
 Provider output should stay compact:
 
 ```text
-app.azurewebsites.net [available] [azure] [app_service]
-name.eastus.cloudapp.azure.com [claimed] [azure] [public_ip_dns_label] [rg:rg-cloudclaim-azure-demo]
-cloudclaim-eb-target.us-east-1.elasticbeanstalk.com [claimed] [aws] [elastic_beanstalk] [env:cc-cloudclaim-eb-target]
+cc-test-app.azurewebsites.net [available] [azure] [app_service]
+cc-test-label.eastus.cloudapp.azure.com [claimed] [azure] [public_ip_dns_label] [rg:rg-cloudclaim-azure-demo]
+cc-test-eb.us-east-1.elasticbeanstalk.com [claimed] [aws] [elastic_beanstalk] [env:cc-cc-test-eb]
 ```
 
 Avoid printing raw cloud API text for normal `not-available` or `unsupported`

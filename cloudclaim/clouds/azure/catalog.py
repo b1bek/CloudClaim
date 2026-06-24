@@ -30,6 +30,13 @@ SERVICE_SPECS = (
         claim_description="Create Standard Public IP with DNS label",
     ),
     AzureServiceSpec(
+        "traffic_manager",
+        re.compile(r"^[a-z0-9-]+\.trafficmanager\.net$", re.I),
+        availability_provider="Microsoft.Network/trafficManagerProfiles",
+        availability_description="Traffic Manager relative DNS name",
+        claim_description="Create Traffic Manager profile with matching DNS name",
+    ),
+    AzureServiceSpec(
         "blob_storage",
         re.compile(r"^[a-z0-9-]+\.blob\.core\.windows\.net$", re.I),
         availability_provider="Microsoft.Storage/storageAccounts",

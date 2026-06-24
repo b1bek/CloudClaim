@@ -43,6 +43,7 @@ Azure:
 
 - `app_service`
 - `public_ip_dns_label`
+- `traffic_manager`
 - `blob_storage`
 - `static_website_storage`
 - `file_storage`
@@ -59,9 +60,10 @@ AWS:
 Human output streams compact tagged lines:
 
 ```text
-name.eastus.cloudapp.azure.com [available] [azure] [public_ip_dns_label]
-cloudclaim-eb-target.us-east-1.elasticbeanstalk.com [not-available] [aws] [elastic_beanstalk]
-demo-parent.us-west-2.elasticbeanstalk.com [available] [aws] [elastic_beanstalk] [child:child.demo-parent.us-west-2.elasticbeanstalk.com]
+cc-test-label.eastus.cloudapp.azure.com [available] [azure] [public_ip_dns_label]
+cc-test-tm.trafficmanager.net [available] [azure] [traffic_manager]
+cc-test-eb.us-east-1.elasticbeanstalk.com [not-available] [aws] [elastic_beanstalk]
+cc-test-eb-parent.us-west-2.elasticbeanstalk.com [available] [aws] [elastic_beanstalk] [child:child.cc-test-eb-parent.us-west-2.elasticbeanstalk.com]
 ```
 
 Use `--json` for JSON lines and `--out result.json` only when you want a full

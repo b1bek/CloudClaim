@@ -21,41 +21,41 @@ from cloudclaim.clouds.aws.services import classify_hostname, normalize_hostname
 
 class AwsHostnameClassificationTests(unittest.TestCase):
     def test_normalizes_urls_and_case(self) -> None:
-        self.assertEqual(normalize_hostname("HTTPS://Demo.Us-East-1.ElasticBeanstalk.Com/path"), "demo.us-east-1.elasticbeanstalk.com")
+        self.assertEqual(normalize_hostname("HTTPS://Cc-Test-Eb.Us-East-1.ElasticBeanstalk.Com/path"), "cc-test-eb.us-east-1.elasticbeanstalk.com")
 
     def test_does_not_classify_unqualified_elastic_beanstalk_hostname(self) -> None:
-        target = classify_hostname("demo-app.elasticbeanstalk.com")
+        target = classify_hostname("cc-test-eb-app.elasticbeanstalk.com")
 
         self.assertIsNone(target)
 
     def test_classifies_regional_elastic_beanstalk_hostname(self) -> None:
-        target = classify_hostname("demo-app.us-west-2.elasticbeanstalk.com")
+        target = classify_hostname("cc-test-eb-app.us-west-2.elasticbeanstalk.com")
 
         self.assertIsNotNone(target)
         assert target is not None
         self.assertEqual(target.service, "elastic_beanstalk")
-        self.assertEqual(target.name, "demo-app")
+        self.assertEqual(target.name, "cc-test-eb-app")
         self.assertEqual(target.region, "us-west-2")
 
     def test_classifies_elastic_beanstalk_descendant_as_parent_cname(self) -> None:
-        target = classify_hostname("child.demo-parent.us-west-2.elasticbeanstalk.com")
+        target = classify_hostname("child.cc-test-eb-parent.us-west-2.elasticbeanstalk.com")
 
         self.assertIsNotNone(target)
         assert target is not None
         self.assertEqual(target.service, "elastic_beanstalk")
-        self.assertEqual(target.hostname, "demo-parent.us-west-2.elasticbeanstalk.com")
-        self.assertEqual(target.name, "demo-parent")
+        self.assertEqual(target.hostname, "cc-test-eb-parent.us-west-2.elasticbeanstalk.com")
+        self.assertEqual(target.name, "cc-test-eb-parent")
         self.assertEqual(target.region, "us-west-2")
-        self.assertEqual(target.source_host, "child.demo-parent.us-west-2.elasticbeanstalk.com")
+        self.assertEqual(target.source_host, "child.cc-test-eb-parent.us-west-2.elasticbeanstalk.com")
 
     def test_does_not_classify_s3_as_claimable(self) -> None:
-        self.assertIsNone(classify_hostname("demo.s3.amazonaws.com"))
+        self.assertIsNone(classify_hostname("cc-test-bucket.s3.amazonaws.com"))
 
     def test_does_not_classify_elb_as_supported_service(self) -> None:
-        self.assertIsNone(classify_hostname("demo-123456789.us-east-1.elb.amazonaws.com"))
+        self.assertIsNone(classify_hostname("cc-test-elb-123456789.us-east-1.elb.amazonaws.com"))
 
     def test_does_not_classify_other_aws_hostname_as_supported_service(self) -> None:
-        self.assertIsNone(classify_hostname("a1234567890abcdef.awsglobalaccelerator.com"))
+        self.assertIsNone(classify_hostname("cc-test-accelerator.awsglobalaccelerator.com"))
 
 
 class AwsInputParsingTests(unittest.TestCase):
@@ -63,26 +63,26 @@ class AwsInputParsingTests(unittest.TestCase):
         with TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "hosts.txt"
             path.write_text(
-                "\n".join(["hostname", "demo-app.us-east-1.elasticbeanstalk.com", "demo.s3.amazonaws.com"]),
+                "\n".join(["hostname", "cc-test-eb-app.us-east-1.elasticbeanstalk.com", "cc-test-bucket.s3.amazonaws.com"]),
                 encoding="utf-8",
             )
 
             targets = load_targets([str(path)])
 
-        self.assertEqual([target.hostname for target in targets], ["demo-app.us-east-1.elasticbeanstalk.com", "demo.s3.amazonaws.com"])
+        self.assertEqual([target.hostname for target in targets], ["cc-test-eb-app.us-east-1.elasticbeanstalk.com", "cc-test-bucket.s3.amazonaws.com"])
         self.assertEqual([target.service for target in targets], ["elastic_beanstalk", "unsupported"])
 
     def test_load_targets_normalizes_elastic_beanstalk_descendants(self) -> None:
-        targets = load_targets(["child.demo-parent.us-west-2.elasticbeanstalk.com"])
+        targets = load_targets(["child.cc-test-eb-parent.us-west-2.elasticbeanstalk.com"])
 
         self.assertEqual(len(targets), 1)
-        self.assertEqual(targets[0].hostname, "demo-parent.us-west-2.elasticbeanstalk.com")
+        self.assertEqual(targets[0].hostname, "cc-test-eb-parent.us-west-2.elasticbeanstalk.com")
         self.assertEqual(targets[0].service, "elastic_beanstalk")
 
     def test_load_targets_rejects_non_txt_file(self) -> None:
         with TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "hosts.csv"
-            path.write_text("hostname\ndemo-app.us-east-1.elasticbeanstalk.com\n", encoding="utf-8")
+            path.write_text("hostname\ncc-test-eb-app.us-east-1.elasticbeanstalk.com\n", encoding="utf-8")
 
             with self.assertRaises(SystemExit):
                 load_targets([str(path)])
@@ -90,31 +90,31 @@ class AwsInputParsingTests(unittest.TestCase):
 
 class AwsAvailabilityTests(unittest.TestCase):
     def test_normalize_available_requires_exact_hostname_match(self) -> None:
-        target = AwsTarget("elastic_beanstalk", "demo.us-east-1.elasticbeanstalk.com", "demo", "us-east-1")
+        target = AwsTarget("elastic_beanstalk", "cc-test-eb.us-east-1.elasticbeanstalk.com", "cc-test-eb", "us-east-1")
 
-        payload = normalize_availability(True, {"Available": True, "FullyQualifiedCNAME": "demo.us-west-2.elasticbeanstalk.com"}, target)
+        payload = normalize_availability(True, {"Available": True, "FullyQualifiedCNAME": "cc-test-eb.us-west-2.elasticbeanstalk.com"}, target)
 
         self.assertFalse(payload["registration_available"])
         self.assertEqual(payload["registration_status"], "not_available")
 
     def test_check_target_reports_available(self) -> None:
-        target = AwsTarget("elastic_beanstalk", "demo.us-east-1.elasticbeanstalk.com", "demo", "us-east-1")
+        target = AwsTarget("elastic_beanstalk", "cc-test-eb.us-east-1.elasticbeanstalk.com", "cc-test-eb", "us-east-1")
         with patch(
             "cloudclaim.clouds.aws.availability.aws_json",
-            return_value=(True, {"Available": True, "FullyQualifiedCNAME": "demo.us-east-1.elasticbeanstalk.com"}),
+            return_value=(True, {"Available": True, "FullyQualifiedCNAME": "cc-test-eb.us-east-1.elasticbeanstalk.com"}),
         ) as aws_json:
             result = check_target(target, "profile")
 
         self.assertTrue(result["registration_available"])
         aws_json.assert_called_once_with(
-            ["elasticbeanstalk", "check-dns-availability", "--cname-prefix", "demo"],
+            ["elasticbeanstalk", "check-dns-availability", "--cname-prefix", "cc-test-eb"],
             region="us-east-1",
             profile="profile",
             timeout=60,
         )
 
     def test_unsupported_check_does_not_call_aws(self) -> None:
-        target = AwsTarget("unsupported", "demo.s3.amazonaws.com", "", "us-east-1")
+        target = AwsTarget("unsupported", "cc-test-bucket.s3.amazonaws.com", "", "us-east-1")
         with patch("cloudclaim.clouds.aws.availability.aws_json") as aws_json:
             result = check_targets([target])
 
@@ -145,24 +145,24 @@ class AwsClaimTests(unittest.TestCase):
         self.assertLessEqual(len(compact_env_name("very-long-target-name-for-cloudclaim-testing")), 40)
 
     def test_claim_targets_checks_before_create(self) -> None:
-        target = AwsTarget("elastic_beanstalk", "demo.us-east-1.elasticbeanstalk.com", "demo", "us-east-1")
+        target = AwsTarget("elastic_beanstalk", "cc-test-eb.us-east-1.elasticbeanstalk.com", "cc-test-eb", "us-east-1")
         options = AwsClaimOptions(application_name="cloudclaim-test", solution_stack_name="stack")
 
         with patch(
             "cloudclaim.clouds.aws.availability.aws_json",
-            return_value=(True, {"Available": True, "FullyQualifiedCNAME": "demo.us-east-1.elasticbeanstalk.com"}),
+            return_value=(True, {"Available": True, "FullyQualifiedCNAME": "cc-test-eb.us-east-1.elasticbeanstalk.com"}),
         ) as availability_aws_json, patch(
             "cloudclaim.clouds.aws.claims.aws_json",
             side_effect=[
                 (True, {"ApplicationName": "cloudclaim-test"}),
-                (True, {"EnvironmentName": "cc-demo-12345678", "CNAME": "demo.us-east-1.elasticbeanstalk.com"}),
+                (True, {"EnvironmentName": "cc-cc-test-eb-12345678", "CNAME": "cc-test-eb.us-east-1.elasticbeanstalk.com"}),
             ],
         ) as claim_aws_json:
             result = claim_targets([target], options, selected_services=None, cleanup=False)
 
         self.assertEqual(result["results"][0]["status"], "claimed")
         availability_aws_json.assert_called_once_with(
-            ["elasticbeanstalk", "check-dns-availability", "--cname-prefix", "demo"],
+            ["elasticbeanstalk", "check-dns-availability", "--cname-prefix", "cc-test-eb"],
             region="us-east-1",
             profile=None,
             timeout=60,
@@ -170,10 +170,10 @@ class AwsClaimTests(unittest.TestCase):
         self.assertEqual(claim_aws_json.mock_calls[1].args[0][0:2], ["elasticbeanstalk", "create-environment"])
 
     def test_claim_targets_does_not_create_when_not_available(self) -> None:
-        target = AwsTarget("elastic_beanstalk", "demo.us-east-1.elasticbeanstalk.com", "demo", "us-east-1")
+        target = AwsTarget("elastic_beanstalk", "cc-test-eb.us-east-1.elasticbeanstalk.com", "cc-test-eb", "us-east-1")
         with patch(
             "cloudclaim.clouds.aws.availability.aws_json",
-            return_value=(True, {"Available": False, "FullyQualifiedCNAME": "demo.us-east-1.elasticbeanstalk.com"}),
+            return_value=(True, {"Available": False, "FullyQualifiedCNAME": "cc-test-eb.us-east-1.elasticbeanstalk.com"}),
         ) as availability_aws_json, patch("cloudclaim.clouds.aws.claims.aws_json") as claim_aws_json:
             result = claim_targets([target], AwsClaimOptions(), selected_services=None, cleanup=False)
 
@@ -182,7 +182,7 @@ class AwsClaimTests(unittest.TestCase):
         claim_aws_json.assert_not_called()
 
     def test_claim_targets_does_not_call_aws_for_unsupported(self) -> None:
-        target = AwsTarget("unsupported", "demo.s3.amazonaws.com", "", "us-east-1")
+        target = AwsTarget("unsupported", "cc-test-bucket.s3.amazonaws.com", "", "us-east-1")
         with patch("cloudclaim.clouds.aws.availability.aws_json") as availability_aws_json, patch("cloudclaim.clouds.aws.claims.aws_json") as claim_aws_json:
             result = claim_targets([target], AwsClaimOptions(), selected_services=None, cleanup=False)
 
@@ -196,10 +196,10 @@ class AwsClaimTests(unittest.TestCase):
             side_effect=[
                 (True, {"Environments": [{"Status": "Launching"}]}),
                 (True, {"Environments": [{"Status": "Ready"}]}),
-                (True, {"EnvironmentName": "cc-demo-12345678"}),
+                (True, {"EnvironmentName": "cc-cc-test-eb-12345678"}),
             ],
         ) as aws_json, patch("cloudclaim.clouds.aws.claims.time.sleep") as sleep:
-            ok, message = terminate_environment("cc-demo-12345678", "us-east-1", "dev")
+            ok, message = terminate_environment("cc-cc-test-eb-12345678", "us-east-1", "dev")
 
         self.assertTrue(ok)
         self.assertEqual(message, "")
@@ -213,7 +213,7 @@ class AwsClaimTests(unittest.TestCase):
             "cloudclaim.clouds.aws.claims.aws_json",
             return_value=(True, {"Environments": [{"Status": "Terminating"}]}),
         ) as aws_json:
-            ok, message = terminate_environment("cc-demo-12345678", "us-east-1", None)
+            ok, message = terminate_environment("cc-cc-test-eb-12345678", "us-east-1", None)
 
         self.assertTrue(ok)
         self.assertEqual(message, "")
@@ -224,7 +224,7 @@ class AwsClaimTests(unittest.TestCase):
 class AwsOutputTests(unittest.TestCase):
     def test_check_parser_does_not_have_region_fallback(self) -> None:
         parser = build_parser(prog="cloudclaim aws")
-        args = parser.parse_args(["check", "demo.us-east-1.elasticbeanstalk.com"])
+        args = parser.parse_args(["check", "cc-test-eb.us-east-1.elasticbeanstalk.com"])
 
         self.assertFalse(hasattr(args, "region"))
 
@@ -290,18 +290,18 @@ class AwsOutputTests(unittest.TestCase):
             print_check_results(
                 [
                     {
-                        "aws_hostname": "demo.us-east-1.elasticbeanstalk.com",
+                        "aws_hostname": "cc-test-eb.us-east-1.elasticbeanstalk.com",
                         "aws_service": "elastic_beanstalk",
                         "registration_available": True,
                         "registration_checked_region": "us-east-1",
-                        "registration_checked_name": "demo",
+                        "registration_checked_name": "cc-test-eb",
                     }
                 ]
             )
 
         text = output.getvalue()
         self.assertIn("[INF] aws check: 1/1 available", text)
-        self.assertIn("demo.us-east-1.elasticbeanstalk.com [available] [aws] [elastic_beanstalk]", text)
+        self.assertIn("cc-test-eb.us-east-1.elasticbeanstalk.com [available] [aws] [elastic_beanstalk]", text)
 
     def test_print_check_results_notes_elastic_beanstalk_parent_normalization(self) -> None:
         output = io.StringIO()
@@ -309,19 +309,19 @@ class AwsOutputTests(unittest.TestCase):
             print_check_results(
                 [
                     {
-                        "aws_hostname": "demo-parent.us-west-2.elasticbeanstalk.com",
+                        "aws_hostname": "cc-test-eb-parent.us-west-2.elasticbeanstalk.com",
                         "aws_service": "elastic_beanstalk",
-                        "source_host": "child.demo-parent.us-west-2.elasticbeanstalk.com",
+                        "source_host": "child.cc-test-eb-parent.us-west-2.elasticbeanstalk.com",
                         "registration_available": True,
                         "registration_checked_region": "us-west-2",
-                        "registration_checked_name": "demo-parent",
+                        "registration_checked_name": "cc-test-eb-parent",
                     }
                 ]
             )
 
         text = output.getvalue()
-        self.assertIn("demo-parent.us-west-2.elasticbeanstalk.com [available] [aws] [elastic_beanstalk]", text)
-        self.assertIn("[child:child.demo-parent.us-west-2.elasticbeanstalk.com]", text)
+        self.assertIn("cc-test-eb-parent.us-west-2.elasticbeanstalk.com [available] [aws] [elastic_beanstalk]", text)
+        self.assertIn("[child:child.cc-test-eb-parent.us-west-2.elasticbeanstalk.com]", text)
 
     def test_print_check_results_json_includes_elastic_beanstalk_parent_note(self) -> None:
         output = io.StringIO()
@@ -329,20 +329,20 @@ class AwsOutputTests(unittest.TestCase):
             print_check_results(
                 [
                     {
-                        "aws_hostname": "demo-parent.us-west-2.elasticbeanstalk.com",
+                        "aws_hostname": "cc-test-eb-parent.us-west-2.elasticbeanstalk.com",
                         "aws_service": "elastic_beanstalk",
-                        "source_host": "child.demo-parent.us-west-2.elasticbeanstalk.com",
+                        "source_host": "child.cc-test-eb-parent.us-west-2.elasticbeanstalk.com",
                         "registration_available": True,
                         "registration_checked_region": "us-west-2",
-                        "registration_checked_name": "demo-parent",
+                        "registration_checked_name": "cc-test-eb-parent",
                     }
                 ],
                 json_output=True,
             )
 
         payload = json.loads(output.getvalue())
-        self.assertEqual(payload["input_hostname"], "child.demo-parent.us-west-2.elasticbeanstalk.com")
-        self.assertEqual(payload["note"], "child:child.demo-parent.us-west-2.elasticbeanstalk.com")
+        self.assertEqual(payload["input_hostname"], "child.cc-test-eb-parent.us-west-2.elasticbeanstalk.com")
+        self.assertEqual(payload["note"], "child:child.cc-test-eb-parent.us-west-2.elasticbeanstalk.com")
 
     def test_print_claim_result_simplifies_not_available_output(self) -> None:
         output = io.StringIO()
@@ -352,11 +352,11 @@ class AwsOutputTests(unittest.TestCase):
                     "application_name": "cloudclaim-eb",
                     "results": [
                         {
-                            "aws_hostname": "demo.us-east-1.elasticbeanstalk.com",
+                            "aws_hostname": "cc-test-eb.us-east-1.elasticbeanstalk.com",
                             "aws_service": "elastic_beanstalk",
                             "registration_available": False,
                             "registration_checked_region": "us-east-1",
-                            "registration_checked_name": "demo",
+                            "registration_checked_name": "cc-test-eb",
                             "registration_status": "not_available",
                             "status": "not_claimed",
                             "message": "AWS availability check did not return available",
@@ -366,12 +366,12 @@ class AwsOutputTests(unittest.TestCase):
             )
 
         text = output.getvalue()
-        self.assertIn("demo.us-east-1.elasticbeanstalk.com [not-available] [aws] [elastic_beanstalk]", text)
+        self.assertIn("cc-test-eb.us-east-1.elasticbeanstalk.com [not-available] [aws] [elastic_beanstalk]", text)
         self.assertNotIn("AWS availability check did not return available", text)
 
     def test_run_check_prechecks_supported_targets(self) -> None:
         output = io.StringIO()
-        target = AwsTarget("elastic_beanstalk", "demo.us-east-1.elasticbeanstalk.com", "demo", "us-east-1")
+        target = AwsTarget("elastic_beanstalk", "cc-test-eb.us-east-1.elasticbeanstalk.com", "cc-test-eb", "us-east-1")
 
         with (
             redirect_stdout(output),
@@ -380,7 +380,7 @@ class AwsOutputTests(unittest.TestCase):
             patch("cloudclaim.clouds.aws.commands.check_targets", return_value=[]),
         ):
             self.assertEqual(
-                run_check(Namespace(inputs=["demo.us-east-1.elasticbeanstalk.com"], profile=None, json=False, out=None, color=False, no_color=True)),
+                run_check(Namespace(inputs=["cc-test-eb.us-east-1.elasticbeanstalk.com"], profile=None, json=False, out=None, color=False, no_color=True)),
                 0,
             )
 
@@ -388,7 +388,7 @@ class AwsOutputTests(unittest.TestCase):
 
     def test_run_check_skips_precheck_for_unsupported_only(self) -> None:
         output = io.StringIO()
-        target = AwsTarget("unsupported", "demo.s3.amazonaws.com", "", "us-east-1")
+        target = AwsTarget("unsupported", "cc-test-bucket.s3.amazonaws.com", "", "us-east-1")
 
         with (
             redirect_stdout(output),
@@ -397,7 +397,7 @@ class AwsOutputTests(unittest.TestCase):
             patch("cloudclaim.clouds.aws.commands.check_targets", return_value=[]),
         ):
             self.assertEqual(
-                run_check(Namespace(inputs=["demo.s3.amazonaws.com"], profile=None, json=False, out=None, color=False, no_color=True)),
+                run_check(Namespace(inputs=["cc-test-bucket.s3.amazonaws.com"], profile=None, json=False, out=None, color=False, no_color=True)),
                 0,
             )
 

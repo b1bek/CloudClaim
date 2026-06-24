@@ -72,6 +72,11 @@ def check_public_ip_dns_label(target: AzureTarget, sub: str) -> dict[str, Any]:
     return normalize_availability(ok, data, target, "Microsoft.Network/publicIPAddresses/dnsSettings")
 
 
+def check_traffic_manager(target: AzureTarget, sub: str) -> dict[str, Any]:
+    ok, data = az_json(["network", "traffic-manager", "profile", "check-dns", "--name", target.name], timeout=60)
+    return normalize_availability(ok, data, target, "Microsoft.Network/trafficManagerProfiles")
+
+
 def check_storage_account(target: AzureTarget, sub: str) -> dict[str, Any]:
     ok, data = az_json(["storage", "account", "check-name", "--name", target.name], timeout=60)
     return normalize_availability(ok, data, target, "Microsoft.Storage/storageAccounts")
@@ -89,6 +94,12 @@ AVAILABILITY_HANDLERS: dict[str, AvailabilityHandler] = {
         SERVICE_BY_NAME["public_ip_dns_label"].availability_provider,
         SERVICE_BY_NAME["public_ip_dns_label"].availability_description,
         check_public_ip_dns_label,
+    ),
+    "traffic_manager": AvailabilityHandler(
+        "traffic_manager",
+        SERVICE_BY_NAME["traffic_manager"].availability_provider,
+        SERVICE_BY_NAME["traffic_manager"].availability_description,
+        check_traffic_manager,
     ),
 }
 for storage_service in STORAGE_SERVICES:

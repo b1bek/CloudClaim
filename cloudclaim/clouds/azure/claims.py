@@ -129,6 +129,38 @@ def claim_public_ip_dns_label(target: AzureTarget, resource_group: str, fallback
     return {"service": target.service, "name": target.name[:63], "location": location, "result": data}
 
 
+def claim_traffic_manager(target: AzureTarget, resource_group: str, fallback_location: str) -> dict[str, Any]:
+    data = require_az(
+        *az_json(
+            [
+                "network",
+                "traffic-manager",
+                "profile",
+                "create",
+                "-g",
+                resource_group,
+                "-n",
+                target.name,
+                "--routing-method",
+                "Priority",
+                "--unique-dns-name",
+                target.name,
+                "--ttl",
+                "30",
+                "--protocol",
+                "HTTP",
+                "--port",
+                "80",
+                "--path",
+                "/",
+            ],
+            timeout=180,
+        ),
+        action="create Traffic Manager profile",
+    )
+    return {"service": target.service, "name": target.name, "location": "global", "result": data}
+
+
 def claim_app_service(target: AzureTarget, resource_group: str, fallback_location: str) -> dict[str, Any]:
     errors = []
     for location in location_candidates(target.location):
@@ -189,6 +221,11 @@ def claim_storage_account(target: AzureTarget, resource_group: str, fallback_loc
 CLAIM_HANDLERS: dict[str, ClaimHandler] = {
     "app_service": ClaimHandler("app_service", SERVICE_BY_NAME["app_service"].claim_description, claim_app_service),
     "public_ip_dns_label": ClaimHandler("public_ip_dns_label", SERVICE_BY_NAME["public_ip_dns_label"].claim_description, claim_public_ip_dns_label),
+    "traffic_manager": ClaimHandler(
+        "traffic_manager",
+        SERVICE_BY_NAME["traffic_manager"].claim_description,
+        claim_traffic_manager,
+    ),
 }
 for storage_service in STORAGE_SERVICES:
     CLAIM_HANDLERS[storage_service] = ClaimHandler(storage_service, SERVICE_BY_NAME[storage_service].claim_description, claim_storage_account)
