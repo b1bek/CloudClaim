@@ -254,6 +254,12 @@ class AwsOutputTests(unittest.TestCase):
 
         self.assertFalse(hasattr(args, "region"))
 
+    def test_check_parser_accepts_env_file(self) -> None:
+        parser = build_parser(prog="cloudclaim aws")
+        args = parser.parse_args(["check", "--env-file", "creds.env", "cc-test-eb.us-east-1.elasticbeanstalk.com"])
+
+        self.assertEqual(args.env_file, "creds.env")
+
     def test_services_output_lists_only_claimable_services(self) -> None:
         output = io.StringIO()
         args = Namespace(json=True, color=False, no_color=True)
@@ -272,18 +278,23 @@ class AwsOutputTests(unittest.TestCase):
         output = io.StringIO()
         args = Namespace(json=True, color=False, no_color=True, profile="dev")
 
-        with redirect_stdout(output), patch(
-            "cloudclaim.clouds.aws.commands.precheck",
-            return_value={
-                "ok": True,
-                "provider": "aws",
-                "account": "123456789012",
-                "arn": "arn:aws:iam::123456789012:user/dev",
-                "user_id": "uid",
-                "region": "us-west-2",
-                "profile": "dev",
-            },
-        ) as precheck_mock:
+        with (
+            redirect_stdout(output),
+            patch.dict("os.environ", {}, clear=True),
+            patch("cloudclaim.clouds.aws.commands.load_env_file", return_value={}),
+            patch(
+                "cloudclaim.clouds.aws.commands.precheck",
+                return_value={
+                    "ok": True,
+                    "provider": "aws",
+                    "account": "123456789012",
+                    "arn": "arn:aws:iam::123456789012:user/dev",
+                    "user_id": "uid",
+                    "region": "us-west-2",
+                    "profile": "dev",
+                },
+            ) as precheck_mock,
+        ):
             self.assertEqual(run_precheck(args), 0)
 
         payload = json.loads(output.getvalue())
@@ -309,6 +320,13 @@ class AwsOutputTests(unittest.TestCase):
 
         self.assertFalse(result["ok"])
         self.assertIn("credentials", result["message"])
+
+    def test_client_precheck_failure_mentions_profile(self) -> None:
+        with patch("cloudclaim.clouds.aws.client.aws_json", return_value=(False, {"stderr": "profile not found"})):
+            result = aws_precheck(region="us-east-1", profile="cloudclaim")
+
+        self.assertFalse(result["ok"])
+        self.assertIn("cloudclaim", result["message"])
 
     def test_print_check_results_outputs_normal_text_by_default(self) -> None:
         output = io.StringIO()
@@ -429,6 +447,8 @@ class AwsOutputTests(unittest.TestCase):
 
         with (
             redirect_stdout(output),
+            patch.dict("os.environ", {}, clear=True),
+            patch("cloudclaim.clouds.aws.commands.load_env_file", return_value={}),
             patch("cloudclaim.clouds.aws.commands.load_targets", return_value=[target]),
             patch("cloudclaim.clouds.aws.commands.precheck", return_value={"ok": True, "provider": "aws", "account": "123456789012"}),
             patch("cloudclaim.clouds.aws.commands.check_targets", return_value=[]),
@@ -446,6 +466,8 @@ class AwsOutputTests(unittest.TestCase):
 
         with (
             redirect_stdout(output),
+            patch.dict("os.environ", {}, clear=True),
+            patch("cloudclaim.clouds.aws.commands.load_env_file", return_value={}) as load_env_file,
             patch("cloudclaim.clouds.aws.commands.load_targets", return_value=[target]),
             patch("cloudclaim.clouds.aws.commands.precheck") as precheck_mock,
             patch("cloudclaim.clouds.aws.commands.check_targets", return_value=[]),
@@ -455,6 +477,7 @@ class AwsOutputTests(unittest.TestCase):
                 0,
             )
 
+        load_env_file.assert_not_called()
         precheck_mock.assert_not_called()
 
 

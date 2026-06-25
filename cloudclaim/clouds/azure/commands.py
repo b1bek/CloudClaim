@@ -2,16 +2,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 from secrets import token_hex
 from typing import Any
 
+from cloudclaim.core.credentials import CredentialFileError, load_env_file
 from cloudclaim.core.output import compact_message, emit, log_line, print_banner, should_color, tag_join
 from cloudclaim.core.targets import has_supported_targets
 
 from .availability import AVAILABILITY_HANDLERS, check_targets
 from .claims import CLAIM_HANDLERS, CLAIMABLE_SERVICES, claim_targets
-from .client import precheck
+from .client import AzureCredentialError, configure_service_principal_from_env, configure_subscription, precheck
 from .inputs import load_targets
 from .output import (
     check_payload,
@@ -64,8 +66,26 @@ def format_precheck_line(payload: dict[str, Any], *, color: bool = False) -> str
     return log_line("ERR", f"azure precheck: failed {compact_message(payload['message'])}", color=color)
 
 
-def run_precheck_once(*, json_output: bool, color: bool, silent_success: bool = False) -> bool:
-    payload = precheck_payload(precheck())
+def configure_credentials(args: argparse.Namespace) -> str | None:
+    try:
+        load_env_file(getattr(args, "env_file", None))
+    except CredentialFileError as exc:
+        raise SystemExit(str(exc)) from exc
+    subscription = (
+        getattr(args, "subscription", None)
+        or os.environ.get("CLOUDCLAIM_AZURE_SUBSCRIPTION")
+        or os.environ.get("AZURE_SUBSCRIPTION_ID")
+    )
+    try:
+        subscription = configure_service_principal_from_env(subscription)
+    except AzureCredentialError as exc:
+        raise SystemExit(str(exc)) from exc
+    configure_subscription(subscription)
+    return subscription
+
+
+def run_precheck_once(*, subscription: str | None, json_output: bool, color: bool, silent_success: bool = False) -> bool:
+    payload = precheck_payload(precheck(subscription=subscription))
     if payload["ok"] and silent_success:
         return True
     if json_output:
@@ -94,6 +114,13 @@ def add_common_args(parser: argparse.ArgumentParser, *, defaults: bool = True, i
         parser.add_argument("--resource-group", help="Resource group for claim resources. Auto-generated if omitted.", **resource_group_kwargs)
 
 
+def add_credential_args(parser: argparse.ArgumentParser, *, defaults: bool = True) -> None:
+    subscription_kwargs: dict[str, Any] = {} if defaults else {"default": argparse.SUPPRESS}
+    env_file_kwargs: dict[str, Any] = {} if defaults else {"default": argparse.SUPPRESS}
+    parser.add_argument("--subscription", help="Azure subscription name or ID", **subscription_kwargs)
+    parser.add_argument("--env-file", help="Load provider credential environment variables from a file", **env_file_kwargs)
+
+
 def add_color_args(parser: argparse.ArgumentParser) -> None:
     color = parser.add_mutually_exclusive_group()
     color.add_argument("--color", action="store_true", help="Force color output")
@@ -102,8 +129,10 @@ def add_color_args(parser: argparse.ArgumentParser) -> None:
 
 def add_command_parsers(parser: argparse.ArgumentParser) -> None:
     add_common_args(parser)
+    add_credential_args(parser)
     add_color_args(parser)
     subcommands = parser.add_subparsers(dest="command")
+    subcommands.required = True
 
     services = subcommands.add_parser("services", help="List supported Azure service handlers")
     add_color_args(services)
@@ -112,11 +141,13 @@ def add_command_parsers(parser: argparse.ArgumentParser) -> None:
 
     precheck_parser = subcommands.add_parser("precheck", help="Check Azure CLI and credentials")
     add_color_args(precheck_parser)
+    add_credential_args(precheck_parser, defaults=False)
     precheck_parser.add_argument("--json", action="store_true", help="Print precheck result as JSON")
     precheck_parser.set_defaults(func=run_precheck)
 
     check = subcommands.add_parser("check", help="Classify Azure hostnames and check claimability")
     add_color_args(check)
+    add_credential_args(check, defaults=False)
     add_common_args(check, defaults=False, include_resource_group=False)
     check.add_argument("inputs", nargs="+", help="Azure hostnames or .txt input files")
     check.add_argument("--json", action="store_true", help="Print compact JSON lines")
@@ -125,6 +156,7 @@ def add_command_parsers(parser: argparse.ArgumentParser) -> None:
 
     claim = subcommands.add_parser("claim", help="Claim supported available Azure hostnames")
     add_color_args(claim)
+    add_credential_args(claim, defaults=False)
     add_common_args(claim, defaults=False)
     claim.add_argument("inputs", nargs="+", help="Azure hostnames or .txt input files")
     claim.add_argument("--json", action="store_true", help="Print compact JSON lines")
@@ -163,21 +195,24 @@ def run_services(args: argparse.Namespace) -> int:
 
 
 def run_precheck(args: argparse.Namespace) -> int:
+    subscription = configure_credentials(args)
     color = should_color(color_mode(args))
     if not args.json:
         print_banner(color=color)
-    return 0 if run_precheck_once(json_output=args.json, color=color) else 1
+    return 0 if run_precheck_once(subscription=subscription, json_output=args.json, color=color) else 1
 
 
 def run_check(args: argparse.Namespace) -> int:
     targets = load_targets(args.inputs, args.location)
+    needs_credentials = has_supported_targets(targets, CLAIMABLE_SERVICES)
+    subscription = configure_credentials(args) if needs_credentials else None
     color = should_color(color_mode(args))
     if not args.json:
         print_banner(color=color)
-        if has_supported_targets(targets, CLAIMABLE_SERVICES) and not run_precheck_once(json_output=False, color=color):
+        if needs_credentials and not run_precheck_once(subscription=subscription, json_output=False, color=color):
             return 1
         emit(log_line("INF", f"azure check: {len(targets)} target{'s' if len(targets) != 1 else ''}", color=color))
-    elif has_supported_targets(targets, CLAIMABLE_SERVICES) and not run_precheck_once(json_output=True, color=color, silent_success=True):
+    elif needs_credentials and not run_precheck_once(subscription=subscription, json_output=True, color=color, silent_success=True):
         return 1
 
     def on_result(item: dict[str, Any]) -> None:
@@ -199,15 +234,17 @@ def run_check(args: argparse.Namespace) -> int:
 def run_claim(args: argparse.Namespace) -> int:
     targets = load_targets(args.inputs, args.location)
     selected_services = selected_services_from_arg(args.services)
+    needs_credentials = has_supported_targets(targets, selected_services or CLAIMABLE_SERVICES)
+    subscription = configure_credentials(args) if needs_credentials else None
     resource_group_prefix = getattr(args, "resource_group_prefix", "rg-cloudclaim-azure")
     resource_group = args.resource_group or f"{resource_group_prefix}-{token_hex(4)}"
     color = should_color(color_mode(args))
     if not args.json:
         print_banner(color=color)
-        if has_supported_targets(targets, selected_services or CLAIMABLE_SERVICES) and not run_precheck_once(json_output=False, color=color):
+        if needs_credentials and not run_precheck_once(subscription=subscription, json_output=False, color=color):
             return 1
         emit(log_line("INF", f"azure claim: {len(targets)} target{'s' if len(targets) != 1 else ''}", color=color))
-    elif has_supported_targets(targets, selected_services or CLAIMABLE_SERVICES) and not run_precheck_once(json_output=True, color=color, silent_success=True):
+    elif needs_credentials and not run_precheck_once(subscription=subscription, json_output=True, color=color, silent_success=True):
         return 1
 
     def on_result(item: dict[str, Any], current_result: dict[str, Any]) -> None:

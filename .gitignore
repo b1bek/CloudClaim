@@ -16,6 +16,9 @@ env/
 
 cloudclaim_*.json
 *_claims.json
+.env
+.env.*
+*.env
 audit-reports/
 
 claim.txt

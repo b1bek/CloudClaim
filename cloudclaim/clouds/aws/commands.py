@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 from typing import Any
 
+from cloudclaim.core.credentials import CredentialFileError, load_env_file
 from cloudclaim.core.output import compact_message, emit, log_line, print_banner, should_color, tag_join
 from cloudclaim.core.targets import has_supported_targets
 
@@ -81,7 +83,17 @@ def selected_services_from_arg(value: str | None) -> set[str] | None:
 
 def add_common_args(parser: argparse.ArgumentParser, *, defaults: bool = True) -> None:
     profile_kwargs: dict[str, Any] = {} if defaults else {"default": argparse.SUPPRESS}
+    env_file_kwargs: dict[str, Any] = {} if defaults else {"default": argparse.SUPPRESS}
     parser.add_argument("--profile", help="AWS CLI profile", **profile_kwargs)
+    parser.add_argument("--env-file", help="Load provider credential environment variables from a file", **env_file_kwargs)
+
+
+def configure_credentials(args: argparse.Namespace) -> str | None:
+    try:
+        load_env_file(getattr(args, "env_file", None))
+    except CredentialFileError as exc:
+        raise SystemExit(str(exc)) from exc
+    return getattr(args, "profile", None) or os.environ.get("CLOUDCLAIM_AWS_PROFILE") or os.environ.get("AWS_PROFILE")
 
 
 def add_color_args(parser: argparse.ArgumentParser) -> None:
@@ -94,6 +106,7 @@ def add_command_parsers(parser: argparse.ArgumentParser) -> None:
     add_common_args(parser)
     add_color_args(parser)
     subcommands = parser.add_subparsers(dest="command")
+    subcommands.required = True
 
     services = subcommands.add_parser("services", help="List supported AWS service handlers")
     add_color_args(services)
@@ -156,21 +169,24 @@ def run_services(args: argparse.Namespace) -> int:
 
 
 def run_precheck(args: argparse.Namespace) -> int:
+    profile = configure_credentials(args)
     color = should_color(color_mode(args))
     if not args.json:
         print_banner(color=color)
-    return 0 if run_precheck_once(region=None, profile=args.profile, json_output=args.json, color=color) else 1
+    return 0 if run_precheck_once(region=None, profile=profile, json_output=args.json, color=color) else 1
 
 
 def run_check(args: argparse.Namespace) -> int:
     targets = load_targets(args.inputs)
+    needs_credentials = has_supported_targets(targets, CLAIMABLE_SERVICES)
+    profile = configure_credentials(args) if needs_credentials else None
     color = should_color(color_mode(args))
     if not args.json:
         print_banner(color=color)
-        if has_supported_targets(targets, CLAIMABLE_SERVICES) and not run_precheck_once(region=None, profile=args.profile, json_output=False, color=color):
+        if needs_credentials and not run_precheck_once(region=None, profile=profile, json_output=False, color=color):
             return 1
         emit(log_line("INF", f"aws check: {len(targets)} target{'s' if len(targets) != 1 else ''}", color=color))
-    elif has_supported_targets(targets, CLAIMABLE_SERVICES) and not run_precheck_once(region=None, profile=args.profile, json_output=True, color=color, silent_success=True):
+    elif needs_credentials and not run_precheck_once(region=None, profile=profile, json_output=True, color=color, silent_success=True):
         return 1
 
     def on_result(item: dict[str, Any]) -> None:
@@ -180,7 +196,7 @@ def run_check(args: argparse.Namespace) -> int:
         else:
             emit(format_check_line(payload, color=color))
 
-    results = check_targets(targets, profile=args.profile, on_result=on_result)
+    results = check_targets(targets, profile=profile, on_result=on_result)
     if not args.json:
         payloads = [check_payload(item) for item in results]
         emit(log_line("INF", f"aws check: {format_check_summary(payloads)}", color=color))
@@ -192,18 +208,20 @@ def run_check(args: argparse.Namespace) -> int:
 def run_claim(args: argparse.Namespace) -> int:
     targets = load_targets(args.inputs)
     selected_services = selected_services_from_arg(args.services)
+    needs_credentials = has_supported_targets(targets, selected_services or CLAIMABLE_SERVICES)
+    profile = configure_credentials(args) if needs_credentials else None
     options = AwsClaimOptions(
-        profile=args.profile,
+        profile=profile,
         application_name=args.application_name,
         solution_stack_name=args.solution_stack_name,
     )
     color = should_color(color_mode(args))
     if not args.json:
         print_banner(color=color)
-        if has_supported_targets(targets, selected_services or CLAIMABLE_SERVICES) and not run_precheck_once(region=None, profile=args.profile, json_output=False, color=color):
+        if needs_credentials and not run_precheck_once(region=None, profile=profile, json_output=False, color=color):
             return 1
         emit(log_line("INF", f"aws claim: {len(targets)} target{'s' if len(targets) != 1 else ''}", color=color))
-    elif has_supported_targets(targets, selected_services or CLAIMABLE_SERVICES) and not run_precheck_once(region=None, profile=args.profile, json_output=True, color=color, silent_success=True):
+    elif needs_credentials and not run_precheck_once(region=None, profile=profile, json_output=True, color=color, silent_success=True):
         return 1
 
     def on_result(item: dict[str, Any], current_result: dict[str, Any]) -> None:

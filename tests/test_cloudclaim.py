@@ -6,10 +6,11 @@ import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from unittest.mock import patch
 
-from cloudclaim.clouds.azure.commands import build_parser, run_check, run_claim, run_precheck, run_services, selected_services_from_arg
+from cloudclaim.cli import main as cloudclaim_main
+from cloudclaim.clouds.azure.commands import build_parser, configure_credentials, run_check, run_claim, run_precheck, run_services, selected_services_from_arg
 from cloudclaim.clouds.azure.availability import (
     AVAILABILITY_HANDLERS,
     check_api_management,
@@ -27,11 +28,20 @@ from cloudclaim.clouds.azure.claims import (
     claim_traffic_manager,
     classify_claim_error,
 )
-from cloudclaim.clouds.azure.client import precheck as azure_precheck
+from cloudclaim.clouds.azure.client import (
+    AzureCredentialError,
+    AzureServicePrincipalCredentials,
+    az_command,
+    configure_subscription,
+    login_service_principal,
+    precheck as azure_precheck,
+    service_principal_credentials_from_env,
+)
 from cloudclaim.clouds.azure.inputs import load_targets
 from cloudclaim.clouds.azure.models import AzureTarget, ClaimHandler
 from cloudclaim.clouds.azure.output import print_check_results, print_claim_result
 from cloudclaim.clouds.azure.services import classify_hostname, normalize_hostname
+from cloudclaim.core.credentials import CredentialFileError, load_env_file
 from cloudclaim.core.output import print_banner, should_color, tag
 
 
@@ -132,6 +142,19 @@ class InputParsingTests(unittest.TestCase):
 
 
 class OutputFormattingTests(unittest.TestCase):
+    def test_no_provider_prints_help_and_returns_usage_error(self) -> None:
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(cloudclaim_main([]), 2)
+
+    def test_provider_without_command_is_usage_error(self) -> None:
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as azure_context:
+            cloudclaim_main(["azure"])
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as aws_context:
+            cloudclaim_main(["aws"])
+
+        self.assertEqual(azure_context.exception.code, 2)
+        self.assertEqual(aws_context.exception.code, 2)
+
     def test_location_defaults_to_auto(self) -> None:
         parser = build_parser(prog="cloudclaim azure")
         args = parser.parse_args(["check", "cc-test-app.azurewebsites.net"])
@@ -149,6 +172,13 @@ class OutputFormattingTests(unittest.TestCase):
         args = parser.parse_args(["--location", "westus2", "claim", "cc-test-app.azurewebsites.net"])
 
         self.assertEqual(args.location, "westus2")
+
+    def test_subscription_and_env_file_can_be_set_after_command(self) -> None:
+        parser = build_parser(prog="cloudclaim azure")
+        args = parser.parse_args(["check", "--subscription", "sub-test", "--env-file", "creds.env", "cc-test-app.azurewebsites.net"])
+
+        self.assertEqual(args.subscription, "sub-test")
+        self.assertEqual(args.env_file, "creds.env")
 
     def test_services_output_lists_only_claimable_services(self) -> None:
         output = io.StringIO()
@@ -169,19 +199,25 @@ class OutputFormattingTests(unittest.TestCase):
         output = io.StringIO()
         args = Namespace(json=True, color=False, no_color=True)
 
-        with redirect_stdout(output), patch(
-            "cloudclaim.clouds.azure.commands.precheck",
-            return_value={
-                "ok": True,
-                "provider": "azure",
-                "account": "user@example.com",
-                "subscription_id": "sub",
-                "subscription_name": "Subscription",
-                "tenant_id": "tenant",
-            },
+        with (
+            redirect_stdout(output),
+            patch.dict("os.environ", {}, clear=True),
+            patch("cloudclaim.clouds.azure.commands.load_env_file", return_value={}) as load_env_file,
+            patch(
+                "cloudclaim.clouds.azure.commands.precheck",
+                return_value={
+                    "ok": True,
+                    "provider": "azure",
+                    "account": "user@example.com",
+                    "subscription_id": "sub",
+                    "subscription_name": "Subscription",
+                    "tenant_id": "tenant",
+                },
+            ),
         ):
             self.assertEqual(run_precheck(args), 0)
 
+        load_env_file.assert_called_once_with(None)
         payload = json.loads(output.getvalue())
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["subscription_id"], "sub")
@@ -197,12 +233,179 @@ class OutputFormattingTests(unittest.TestCase):
         self.assertEqual(result["subscription_id"], "sub")
         self.assertEqual(result["account"], "user@example.com")
 
+    def test_client_command_uses_configured_subscription(self) -> None:
+        configure_subscription("sub-test")
+        try:
+            command = az_command(["account", "show"], output="json")
+        finally:
+            configure_subscription(None)
+
+        self.assertEqual(command, ["az", "account", "show", "--only-show-errors", "-o", "json", "--subscription", "sub-test"])
+
+    def test_client_command_can_skip_configured_subscription(self) -> None:
+        configure_subscription("sub-test")
+        try:
+            command = az_command(["login"], output="json", use_configured_subscription=False)
+        finally:
+            configure_subscription(None)
+
+        self.assertEqual(command, ["az", "login", "--only-show-errors", "-o", "json"])
+
+    def test_service_principal_credentials_from_env_supports_standard_names(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "AZURE_CLIENT_ID": "app-id",
+                "AZURE_CLIENT_SECRET": "secret",
+                "AZURE_TENANT_ID": "tenant",
+                "AZURE_SUBSCRIPTION_ID": "sub",
+            },
+            clear=True,
+        ):
+            creds = service_principal_credentials_from_env()
+
+        self.assertEqual(creds, AzureServicePrincipalCredentials("app-id", "secret", "tenant", "sub"))
+
+    def test_service_principal_credentials_from_env_supports_cloudclaim_aliases(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "CLOUDCLAIM_AZURE_CLIENT_ID": "app-id",
+                "CLOUDCLAIM_AZURE_CLIENT_SECRET": "secret",
+                "CLOUDCLAIM_AZURE_TENANT_ID": "tenant",
+                "CLOUDCLAIM_AZURE_SUBSCRIPTION": "sub",
+            },
+            clear=True,
+        ):
+            creds = service_principal_credentials_from_env()
+
+        self.assertEqual(creds, AzureServicePrincipalCredentials("app-id", "secret", "tenant", "sub"))
+
+    def test_service_principal_credentials_from_env_ignores_subscription_only(self) -> None:
+        with patch.dict("os.environ", {"AZURE_SUBSCRIPTION_ID": "sub"}, clear=True):
+            creds = service_principal_credentials_from_env()
+
+        self.assertIsNone(creds)
+
+    def test_service_principal_credentials_from_env_ignores_tenant_only(self) -> None:
+        with patch.dict("os.environ", {"AZURE_TENANT_ID": "tenant"}, clear=True):
+            creds = service_principal_credentials_from_env()
+
+        self.assertIsNone(creds)
+
+    def test_service_principal_credentials_from_env_reports_partial_credentials(self) -> None:
+        with patch.dict("os.environ", {"AZURE_CLIENT_ID": "app-id"}, clear=True):
+            with self.assertRaises(AzureCredentialError) as context:
+                service_principal_credentials_from_env()
+
+        self.assertIn("Azure service principal credentials are incomplete", str(context.exception))
+        self.assertIn("AZURE_CLIENT_SECRET", str(context.exception))
+
+    def test_service_principal_login_uses_az_login_without_subscription_flag(self) -> None:
+        creds = AzureServicePrincipalCredentials("app-id", "secret", "tenant", "sub")
+
+        with patch("cloudclaim.clouds.azure.client.az_json", return_value=(True, {})) as az_json:
+            login_service_principal(creds)
+
+        az_json.assert_called_once_with(
+            [
+                "login",
+                "--service-principal",
+                "--username",
+                "app-id",
+                "--password",
+                "secret",
+                "--tenant",
+                "tenant",
+            ],
+            timeout=60,
+            use_configured_subscription=False,
+        )
+
+    def test_service_principal_login_reports_az_failure(self) -> None:
+        creds = AzureServicePrincipalCredentials("app-id", "secret", "tenant", "sub")
+
+        with patch("cloudclaim.clouds.azure.client.az_json", return_value=(False, {"stderr": "invalid client secret"})):
+            with self.assertRaises(AzureCredentialError) as context:
+                login_service_principal(creds)
+
+        self.assertIn("Azure service principal login failed", str(context.exception))
+
+    def test_configure_credentials_logs_in_service_principal_from_env(self) -> None:
+        args = Namespace(subscription=None, env_file=None)
+        with (
+            patch.dict(
+                "os.environ",
+                {
+                    "AZURE_CLIENT_ID": "app-id",
+                    "AZURE_CLIENT_SECRET": "secret",
+                    "AZURE_TENANT_ID": "tenant",
+                    "AZURE_SUBSCRIPTION_ID": "sub",
+                },
+                clear=True,
+            ),
+            patch("cloudclaim.clouds.azure.commands.load_env_file", return_value={}),
+            patch("cloudclaim.clouds.azure.client.az_json", return_value=(True, {})) as az_json,
+        ):
+            try:
+                subscription = configure_credentials(args)
+            finally:
+                configure_subscription(None)
+
+        self.assertEqual(subscription, "sub")
+        self.assertEqual(az_json.call_args.kwargs["use_configured_subscription"], False)
+
+    def test_configure_credentials_reports_incomplete_service_principal(self) -> None:
+        args = Namespace(subscription=None, env_file=None)
+        with (
+            patch.dict("os.environ", {"AZURE_CLIENT_ID": "app-id"}, clear=True),
+            patch("cloudclaim.clouds.azure.commands.load_env_file", return_value={}),
+            self.assertRaises(SystemExit) as context,
+        ):
+            configure_credentials(args)
+
+        self.assertIn("Azure service principal credentials are incomplete", str(context.exception))
+
+    def test_env_file_loader_sets_explicit_values(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "creds.env"
+            path.write_text("CLOUDCLAIM_AZURE_SUBSCRIPTION='sub-test'\n# ignored\nAWS_PROFILE=cloudclaim\n", encoding="utf-8")
+
+            with patch.dict("os.environ", {}, clear=True):
+                loaded = load_env_file(str(path))
+
+                self.assertEqual(loaded["CLOUDCLAIM_AZURE_SUBSCRIPTION"], "sub-test")
+                self.assertEqual(loaded["AWS_PROFILE"], "cloudclaim")
+
+    def test_env_file_loader_uses_env_path_when_present(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "custom-creds.env"
+            path.write_text('CLOUDCLAIM_AZURE_SUBSCRIPTION="sub-default"\n', encoding="utf-8")
+
+            with patch.dict("os.environ", {"CLOUDCLAIM_ENV_FILE": str(path)}, clear=True):
+                loaded = load_env_file(None)
+
+                self.assertEqual(loaded["CLOUDCLAIM_AZURE_SUBSCRIPTION"], "sub-default")
+
+    def test_env_file_loader_reports_missing_file(self) -> None:
+        with self.assertRaises(CredentialFileError) as context:
+            load_env_file("missing-creds.env")
+
+        self.assertIn("credential env file could not be read", str(context.exception))
+
     def test_client_precheck_reports_failure(self) -> None:
         with patch("cloudclaim.clouds.azure.client.az_json", return_value=(False, {"stderr": "please run az login"})):
             result = azure_precheck()
 
         self.assertFalse(result["ok"])
         self.assertIn("az login", result["message"])
+
+    def test_client_precheck_failure_mentions_subscription_override(self) -> None:
+        with patch("cloudclaim.clouds.azure.client.az_json", return_value=(False, {"stderr": "subscription not found"})):
+            result = azure_precheck(subscription="sub-test")
+
+        self.assertFalse(result["ok"])
+        self.assertIn("sub-test", result["message"])
 
     def test_print_check_results_outputs_normal_text_by_default(self) -> None:
         output = io.StringIO()
@@ -321,6 +524,25 @@ class OutputFormattingTests(unittest.TestCase):
         text = output.getvalue()
         self.assertIn("[INF] azure check: 0/1 available", text)
         self.assertIn("cc-test-label-used.eastus.cloudapp.azure.com [not-available] [azure] [public_ip_dns_label]", text)
+
+    def test_print_check_results_reports_errors_as_failed(self) -> None:
+        output = io.StringIO()
+        with redirect_stdout(output):
+            print_check_results(
+                [
+                    {
+                        "azure_hostname": "cc-test-app.azurewebsites.net",
+                        "azure_service": "app_service",
+                        "registration_available": "",
+                        "registration_status": "error",
+                        "registration_message": "Azure API unavailable",
+                    }
+                ]
+            )
+
+        text = output.getvalue()
+        self.assertIn("cc-test-app.azurewebsites.net [failed] [azure] [app_service] Azure API unavailable", text)
+        self.assertNotIn("[not-available]", text)
 
     def test_print_claim_result_outputs_normal_text_by_default(self) -> None:
         output = io.StringIO()
@@ -593,10 +815,14 @@ class OutputFormattingTests(unittest.TestCase):
         args = Namespace(inputs=["cc-test-label.eastus.cloudapp.azure.com"], location="eastus", json=False, out=None, color=False, no_color=True)
         with (
             redirect_stdout(output),
+            patch.dict("os.environ", {}, clear=True),
+            patch("cloudclaim.clouds.azure.commands.load_env_file", return_value={}) as load_env_file,
             patch("cloudclaim.clouds.azure.commands.load_targets", return_value=[object()]),
             patch("cloudclaim.clouds.azure.commands.check_targets", side_effect=fake_check_targets),
         ):
             self.assertEqual(run_check(args), 0)
+
+        load_env_file.assert_not_called()
 
     def test_run_check_prechecks_supported_targets(self) -> None:
         output = io.StringIO()
@@ -604,7 +830,10 @@ class OutputFormattingTests(unittest.TestCase):
 
         with (
             redirect_stdout(output),
+            patch.dict("os.environ", {}, clear=True),
+            patch("cloudclaim.clouds.azure.commands.load_env_file", return_value={}),
             patch("cloudclaim.clouds.azure.commands.load_targets", return_value=[target]),
+            patch("cloudclaim.clouds.azure.commands.configure_service_principal_from_env", return_value=None),
             patch("cloudclaim.clouds.azure.commands.precheck", return_value={"ok": True, "provider": "azure", "subscription_id": "sub", "subscription_name": "Subscription"}),
             patch("cloudclaim.clouds.azure.commands.check_targets", return_value=[]),
         ):
@@ -618,12 +847,15 @@ class OutputFormattingTests(unittest.TestCase):
 
         with (
             redirect_stdout(output),
+            patch.dict("os.environ", {}, clear=True),
+            patch("cloudclaim.clouds.azure.commands.load_env_file", return_value={}) as load_env_file,
             patch("cloudclaim.clouds.azure.commands.load_targets", return_value=[target]),
             patch("cloudclaim.clouds.azure.commands.precheck") as precheck_mock,
             patch("cloudclaim.clouds.azure.commands.check_targets", return_value=[]),
         ):
             self.assertEqual(run_check(Namespace(inputs=["cc-test-frontdoor.azurefd.net"], location="auto", json=False, out=None, color=False, no_color=True)), 0)
 
+        load_env_file.assert_not_called()
         precheck_mock.assert_not_called()
 
     def test_run_claim_streams_results_before_backend_returns(self) -> None:
@@ -661,10 +893,14 @@ class OutputFormattingTests(unittest.TestCase):
         )
         with (
             redirect_stdout(output),
+            patch.dict("os.environ", {}, clear=True),
+            patch("cloudclaim.clouds.azure.commands.load_env_file", return_value={}) as load_env_file,
             patch("cloudclaim.clouds.azure.commands.load_targets", return_value=[object()]),
             patch("cloudclaim.clouds.azure.commands.claim_targets", side_effect=fake_claim_targets),
         ):
             self.assertEqual(run_claim(args), 0)
+
+        load_env_file.assert_not_called()
 
 
 class ClaimCleanupBehaviorTests(unittest.TestCase):

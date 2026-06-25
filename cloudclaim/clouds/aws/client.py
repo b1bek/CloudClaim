@@ -76,6 +76,8 @@ def precheck(*, region: str | None = None, profile: str | None = None) -> dict[s
     ok, data = aws_json(["sts", "get-caller-identity"], region=region, profile=profile, timeout=30)
     if not ok:
         detail = data.get("stderr") or data.get("error") or json.dumps(data)
+        if profile:
+            detail = f"AWS credential precheck failed for profile {profile!r}: {detail}"
         return {"ok": False, "provider": "aws", "message": str(detail), "region": region or "", "profile": profile or ""}
 
     account = str(data.get("Account", "") or "")

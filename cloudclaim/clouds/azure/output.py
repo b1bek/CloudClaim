@@ -46,10 +46,15 @@ def claim_payload(item: dict[str, Any], result: dict[str, Any]) -> dict[str, Any
 def format_check_line(payload: dict[str, Any], *, color: bool = False) -> str:
     if payload["status"] == "unsupported":
         status = "unsupported"
+    elif payload["status"] == "error":
+        status = "failed"
     else:
         status = "available" if payload["available"] else "not-available"
     fields = [status, "azure", payload["service"]]
-    return f"{payload['hostname']} {tag_join(*fields, color=color)}"
+    line = f"{payload['hostname']} {tag_join(*fields, color=color)}"
+    if payload["status"] == "error" and payload["message"]:
+        line = f"{line} {paint(compact_message(payload['message']), 'yellow', color)}"
+    return line
 
 
 def format_check_summary(payloads: list[dict[str, Any]]) -> str:

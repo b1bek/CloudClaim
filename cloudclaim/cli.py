@@ -17,9 +17,6 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.cloud in PROVIDERS_BY_NAME:
-        if not getattr(args, "command", None):
-            parser.parse_args([args.cloud, "--help"])
-            return 2
         return dispatch_provider(args, PROVIDERS_BY_NAME)
 
     parser.print_help()

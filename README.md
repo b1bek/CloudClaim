@@ -1,43 +1,9 @@
 # CloudClaim
 
-CloudClaim checks whether dangling cloud hostnames are claimable and can create
-minimal proof resources for claimable services.
+CloudClaim checks dangling cloud hostnames and can create minimal proof
+resources for supported services.
 
-It is conservative by design: unsupported or unclaimable hostnames are reported
-as generic `unsupported`.
-
-## Quick Start
-
-Prerequisites:
-
-- Python 3.11+
-- `uv`
-- Azure CLI (`az`) for Azure checks/claims
-- AWS CLI (`aws`) for AWS checks/claims
-
-```bash
-uv run cloudclaim azure precheck
-uv run cloudclaim aws precheck --profile default
-
-uv run cloudclaim azure check targets.txt
-uv run cloudclaim aws check targets.txt --profile default
-
-uv run cloudclaim azure claim targets.txt
-uv run cloudclaim aws claim targets.txt --profile default
-```
-
-Input files must be `.txt`, one hostname per line. Direct hostname arguments
-also work.
-
-CloudClaim claims only reserve the provider hostname with a minimal proof
-resource. They do not deploy a complete hosted PoC page, application, or content
-response; do provider-specific deployment/configuration after the claim if you
-need that.
-
-Resources are kept by default. Use `--cleanup` only when you want CloudClaim to
-start cleanup automatically.
-
-## Claimable Services
+## Supported Services
 
 Azure:
 
@@ -51,39 +17,64 @@ Azure:
 - `queue_storage`
 - `table_storage`
 
-Azure CDN `*.azureedge.net` hostnames are not claimable by CloudClaim because
-Azure CDN Standard from Microsoft (classic) no longer supports new profile
-creation. Replacement Front Door endpoints use a different hostname suffix.
+AWS:
+
+- `elastic_beanstalk`
+
+## Requirements
+
+- Python 3.11+
+- Azure CLI (`az`) for Azure
+- AWS CLI (`aws`) for AWS
+- `uv` optional
+
+## Credentials
+
+CloudClaim reads your environment and loads `.env` when present. Use
+`--env-file <path>` for another file. Do not commit credential files.
+Credential files are optional if `az` or `aws` already has usable CLI
+credentials.
+
+Azure service principal:
+
+```text
+AZURE_CLIENT_ID=<app-id>
+AZURE_CLIENT_SECRET=<client-secret>
+AZURE_TENANT_ID=<tenant-id>
+AZURE_SUBSCRIPTION_ID=<subscription-id>
+```
 
 AWS:
 
-- `elastic_beanstalk` (`name.region.elasticbeanstalk.com`; descendant labels
-  normalize to this parent CNAME)
-
-## Output
-
-Human output streams compact tagged lines:
-
 ```text
-cc-test-label.eastus.cloudapp.azure.com [available] [azure] [public_ip_dns_label]
-cc-test-tm.trafficmanager.net [available] [azure] [traffic_manager]
-cc-test-apim.azure-api.net [available] [azure] [api_management]
-cc-test-eb.us-east-1.elasticbeanstalk.com [not-available] [aws] [elastic_beanstalk]
-cc-test-eb-parent.us-west-2.elasticbeanstalk.com [available] [aws] [elastic_beanstalk] [child:child.cc-test-eb-parent.us-west-2.elasticbeanstalk.com]
+AWS_PROFILE=cloudclaim-check
+# or
+AWS_ACCESS_KEY_ID=<access-key-id>
+AWS_SECRET_ACCESS_KEY=<secret-access-key>
+AWS_SESSION_TOKEN=<session-token-if-used>
 ```
 
-Use `--json` for JSON lines and `--out result.json` only when you want a full
-result file.
+See [Usage](docs/USAGE.md) for brief credential creation steps.
+
+## Run
+
+Input files must be `.txt`, one hostname per line.
+
+```bash
+uv run cloudclaim azure precheck
+uv run cloudclaim azure check targets.txt
+uv run cloudclaim azure claim targets.txt
+
+uv run cloudclaim aws precheck
+uv run cloudclaim aws check targets.txt
+uv run cloudclaim aws claim targets.txt
+```
+
+Use `--json` for JSON lines. Use `--out result.json` to write full results.
+Resources are kept unless `--cleanup` is passed.
 
 ## Docs
 
 - [Usage](docs/USAGE.md)
 - [Architecture](docs/ARCHITECTURE.md)
-- [Adding Providers And Services](docs/ADDING_SERVICES.md)
-- [Agent Guide](AGENTS.md)
-
-## Development
-
-```bash
-uv run python -B -m unittest discover -s tests
-```
+- [Adding Services](docs/ADDING_SERVICES.md)
