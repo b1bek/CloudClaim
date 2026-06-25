@@ -14,7 +14,7 @@ from cloudclaim.clouds.aws.claims import claim_targets, compact_env_name, select
 from cloudclaim.clouds.aws.client import precheck as aws_precheck
 from cloudclaim.clouds.aws.commands import build_parser, run_check, run_precheck, run_services, selected_services_from_arg
 from cloudclaim.clouds.aws.inputs import load_targets
-from cloudclaim.clouds.aws.models import AwsClaimOptions, AwsTarget
+from cloudclaim.clouds.aws.models import AwsClaimOptions, AwsTarget, ClaimHandler
 from cloudclaim.clouds.aws.output import print_check_results, print_claim_result
 from cloudclaim.clouds.aws.services import classify_hostname, normalize_hostname
 
@@ -180,6 +180,32 @@ class AwsClaimTests(unittest.TestCase):
         self.assertEqual(result["results"][0]["status"], "not_claimed")
         availability_aws_json.assert_called_once()
         claim_aws_json.assert_not_called()
+
+    def test_claim_create_time_not_available_is_counted_as_attempted(self) -> None:
+        target = AwsTarget("elastic_beanstalk", "cc-test-eb.us-east-1.elasticbeanstalk.com", "cc-test-eb", "us-east-1")
+        handler = ClaimHandler("elastic_beanstalk", "test", lambda target, options: (_ for _ in ()).throw(RuntimeError("CNAME is not available.")))
+
+        with (
+            patch(
+                "cloudclaim.clouds.aws.claims.check_target",
+                return_value={
+                    "aws_hostname": target.hostname,
+                    "aws_service": target.service,
+                    "registration_available": True,
+                    "registration_checked_region": target.region,
+                    "registration_checked_name": target.name,
+                    "registration_status": "available",
+                },
+            ),
+            patch("cloudclaim.clouds.aws.claims.CLAIM_HANDLERS", {target.service: handler}),
+        ):
+            result = claim_targets([target], AwsClaimOptions(), selected_services=None, cleanup=False)
+
+        entry = result["results"][0]
+        self.assertEqual(entry["status"], "not_claimed")
+        self.assertEqual(entry["registration_status"], "not_available")
+        self.assertIs(entry["registration_available"], False)
+        self.assertIs(entry["claim_attempted"], True)
 
     def test_claim_targets_does_not_call_aws_for_unsupported(self) -> None:
         target = AwsTarget("unsupported", "cc-test-bucket.s3.amazonaws.com", "", "us-east-1")
@@ -368,6 +394,34 @@ class AwsOutputTests(unittest.TestCase):
         text = output.getvalue()
         self.assertIn("cc-test-eb.us-east-1.elasticbeanstalk.com [not-available] [aws] [elastic_beanstalk]", text)
         self.assertNotIn("AWS availability check did not return available", text)
+
+    def test_print_claim_result_simplifies_create_time_not_available_output(self) -> None:
+        output = io.StringIO()
+        with redirect_stdout(output):
+            print_claim_result(
+                {
+                    "application_name": "cloudclaim-eb",
+                    "results": [
+                        {
+                            "aws_hostname": "cc-test-eb.us-east-1.elasticbeanstalk.com",
+                            "aws_service": "elastic_beanstalk",
+                            "registration_available": False,
+                            "registration_checked_region": "us-east-1",
+                            "registration_checked_name": "cc-test-eb",
+                            "registration_status": "not_available",
+                            "status": "not_claimed",
+                            "claim_attempted": True,
+                            "message": "AWS reported the name is not available",
+                        }
+                    ],
+                }
+            )
+
+        text = output.getvalue()
+        self.assertIn("[INF] aws claim: 0/1 claimed, 1/1 attempted", text)
+        self.assertIn("cc-test-eb.us-east-1.elasticbeanstalk.com [not-available] [aws] [elastic_beanstalk]", text)
+        self.assertNotIn("[claim:failed]", text)
+        self.assertNotIn("AWS reported the name is not available", text)
 
     def test_run_check_prechecks_supported_targets(self) -> None:
         output = io.StringIO()

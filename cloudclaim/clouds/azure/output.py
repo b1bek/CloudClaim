@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from cloudclaim.core.output import compact_message, emit, log_line, paint, tag, tag_join
+from cloudclaim.core.output import claim_attempted, claim_status, compact_message, emit, log_line, paint, tag, tag_join
 
 
 def bool_availability(item: dict[str, Any]) -> bool:
@@ -29,7 +29,7 @@ def claim_payload(item: dict[str, Any], result: dict[str, Any]) -> dict[str, Any
         "available": bool_availability(item),
         "availability_status": item.get("registration_status", ""),
         "checked": checked,
-        "claim_attempted": status in {"claimed", "claim_failed"},
+        "claim_attempted": claim_attempted(item, status),
         "claimed": status == "claimed",
         "failure_reason": item.get("failure_reason", ""),
         "hint": item.get("hint", ""),
@@ -57,27 +57,21 @@ def format_check_summary(payloads: list[dict[str, Any]]) -> str:
     return f"{available_count}/{len(payloads)} available"
 
 
-def claim_status(payload: dict[str, Any]) -> str:
-    if payload["claimed"]:
-        return "claimed"
-    if payload["claim_attempted"]:
-        return "failed"
-    if payload["status"] == "duplicate":
-        return "duplicate"
-    if payload["status"] == "skipped_service":
-        return "skipped"
-    if payload["status"] in {"unsupported", "unsupported_claim"}:
-        return "unsupported"
-    if not payload["available"]:
-        return "not-available"
-    return "not-claimed"
-
-
 def format_claim_line(payload: dict[str, Any], *, color: bool = False) -> str:
-    fields = [claim_status(payload), "azure", payload["service"]]
-    if (payload["claim_attempted"] or payload["claimed"]) and payload["resource_group"]:
+    fields = [
+        claim_status(
+            claimed=payload["claimed"],
+            status=payload["status"],
+            available=payload["available"],
+            attempted=payload["claim_attempted"],
+        ),
+        "azure",
+        payload["service"],
+    ]
+    failed = payload["status"] == "claim_failed"
+    if (failed or payload["claimed"]) and payload["resource_group"]:
         fields.append(f"rg:{payload['resource_group']}")
-    if payload["claim_attempted"] and not payload["claimed"]:
+    if failed:
         fields.append("claim:failed")
         if payload["failure_reason"]:
             fields.append(payload["failure_reason"])
@@ -85,9 +79,9 @@ def format_claim_line(payload: dict[str, Any], *, color: bool = False) -> str:
             fields.append(f"region:{payload['location']}")
 
     line = f"{payload['hostname']} {tag_join(*fields, color=color)}"
-    if payload["claim_attempted"] and not payload["claimed"] and payload["message"]:
+    if failed and payload["message"]:
         line = f"{line} {paint(compact_message(payload['message']), 'yellow', color)}"
-    if payload["claim_attempted"] and not payload["claimed"] and payload["hint"]:
+    if failed and payload["hint"]:
         line = f"{line} {tag('hint', color=color)} {paint(compact_message(payload['hint']), 'cyan', color)}"
     if payload["status"] == "unsupported_claim" and payload["message"]:
         line = f"{line} {paint(compact_message(payload['message']), 'yellow', color)}"

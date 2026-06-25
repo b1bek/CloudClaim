@@ -242,6 +242,7 @@ def claim_targets(
                 seen.add(key)
                 handler = CLAIM_HANDLERS[target.service]
                 try:
+                    entry["claim_attempted"] = True
                     created = handler.create(target, options)
                     entry.update({"status": "claimed", "created": created})
                 except Exception as exc:

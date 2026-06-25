@@ -422,6 +422,7 @@ class OutputFormattingTests(unittest.TestCase):
                             "registration_checked_name": "cc-test-label-01",
                             "registration_status": "not_available",
                             "status": "not_claimed",
+                            "claim_attempted": True,
                             "message": "Azure reported the name is not available",
                         }
                     ],
@@ -429,8 +430,10 @@ class OutputFormattingTests(unittest.TestCase):
             )
 
         text = output.getvalue()
+        self.assertIn("[INF] azure claim: 0/1 claimed, 1/1 attempted", text)
         self.assertIn("cc-test-label-01.eastus.cloudapp.azure.com [not-available] [azure] [public_ip_dns_label]", text)
         self.assertNotIn("[claim:failed]", text)
+        self.assertNotIn("[rg:rg-cloudclaim-azure-test]", text)
         self.assertNotIn("Azure reported the name is not available", text)
 
     def test_print_claim_result_includes_failure_reason(self) -> None:
@@ -669,7 +672,7 @@ class ClaimCleanupBehaviorTests(unittest.TestCase):
         self.assertNotIn("made_up_service", AVAILABILITY_HANDLERS)
         self.assertNotIn("made_up_service", CLAIM_HANDLERS)
 
-    def test_check_traffic_manager_uses_provider_dns_availability(self) -> None:
+    def test_check_traffic_manager_uses_subscription_scoped_provider_dns_availability(self) -> None:
         target = AzureTarget(
             service="traffic_manager",
             azure_hostname="cc-test-tm.trafficmanager.net",
@@ -681,7 +684,15 @@ class ClaimCleanupBehaviorTests(unittest.TestCase):
             result = check_traffic_manager(target, "sub")
 
         az_json.assert_called_once_with(
-            ["network", "traffic-manager", "profile", "check-dns", "--name", "cc-test-tm"],
+            [
+                "rest",
+                "--method",
+                "post",
+                "--url",
+                "https://management.azure.com/subscriptions/sub/providers/Microsoft.Network/checkTrafficManagerNameAvailabilityV2?api-version=2022-04-01",
+                "--body",
+                '{"name": "cc-test-tm", "type": "microsoft.network/trafficmanagerprofiles"}',
+            ],
             timeout=60,
         )
         self.assertEqual(result["registration_provider"], "Microsoft.Network/trafficManagerProfiles")
@@ -961,6 +972,7 @@ class ClaimCleanupBehaviorTests(unittest.TestCase):
         self.assertEqual(entry["status"], "not_claimed")
         self.assertEqual(entry["registration_status"], "not_available")
         self.assertIs(entry["registration_available"], False)
+        self.assertIs(entry["claim_attempted"], True)
 
     def test_claim_does_not_attempt_without_plain_available(self) -> None:
         target = AzureTarget(

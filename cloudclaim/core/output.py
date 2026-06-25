@@ -75,6 +75,28 @@ def compact_message(value: Any, *, limit: int = 240) -> str:
     return f"{text[: limit - 1].rstrip()}..."
 
 
+def claim_attempted(item: dict[str, Any], status: str) -> bool:
+    return bool(item.get("claim_attempted")) or status in {"claimed", "claim_failed"}
+
+
+def claim_status(*, claimed: bool, status: str, available: bool, attempted: bool) -> str:
+    if claimed:
+        return "claimed"
+    if status == "claim_failed":
+        return "failed"
+    if status == "duplicate":
+        return "duplicate"
+    if status == "skipped_service":
+        return "skipped"
+    if status in {"unsupported", "unsupported_claim"}:
+        return "unsupported"
+    if not available:
+        return "not-available"
+    if attempted:
+        return "failed"
+    return "not-claimed"
+
+
 def log_line(level: str, message: str, *, color: bool) -> str:
     return f"{tag(level, color=color)} {message}"
 

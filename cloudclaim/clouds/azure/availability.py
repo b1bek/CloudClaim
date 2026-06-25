@@ -73,7 +73,18 @@ def check_public_ip_dns_label(target: AzureTarget, sub: str) -> dict[str, Any]:
 
 
 def check_traffic_manager(target: AzureTarget, sub: str) -> dict[str, Any]:
-    ok, data = az_json(["network", "traffic-manager", "profile", "check-dns", "--name", target.name], timeout=60)
+    ok, data = az_json(
+        [
+            "rest",
+            "--method",
+            "post",
+            "--url",
+            f"https://management.azure.com/subscriptions/{sub}/providers/Microsoft.Network/checkTrafficManagerNameAvailabilityV2?api-version=2022-04-01",
+            "--body",
+            json.dumps({"name": target.name, "type": "microsoft.network/trafficmanagerprofiles"}),
+        ],
+        timeout=60,
+    )
     return normalize_availability(ok, data, target, "Microsoft.Network/trafficManagerProfiles")
 
 

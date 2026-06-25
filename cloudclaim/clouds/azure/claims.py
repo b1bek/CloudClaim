@@ -329,6 +329,7 @@ def claim_targets(
                 try:
                     if handler.requires_resource_group:
                         entry["claim_resource_group"] = resource_group
+                    entry["claim_attempted"] = True
                     created = handler.create(target, resource_group, fallback_location)
                     if isinstance(created, dict) and created.get("resource_group"):
                         entry["claim_resource_group"] = created["resource_group"]
